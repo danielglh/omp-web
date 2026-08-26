@@ -1,0 +1,10 @@
+{
+	"extends": "../tsconfig.base.json",
+	"compilerOptions": {
+		"types": ["bun"],
+		"paths": {
+			"@omp-web/shared": ["../shared/src/index.ts"]
+		}
+	},
+	"include": ["src", "../shared/src"]
+}

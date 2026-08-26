@@ -1,0 +1,26 @@
+{
+	"name": "@omp-web/server",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Bun server: spawns omp --mode rpc subprocesses and bridges them to the browser UI",
+	"license": "MIT",
+	"scripts": {
+		"dev": "bun --watch src/index.ts",
+		"build": "rm -rf dist && bun build src/index.ts --outdir=dist --target=bun --minify --sourcemap",
+		"start": "bun dist/index.js",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "bun test",
+		"mock": "bun scripts/mock-rpc-host.ts"
+	},
+	"dependencies": {
+		"@omp-web/shared": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.3.0",
+		"typescript": "^5.9.0"
+	},
+	"engines": {
+		"bun": ">=1.3.14"
+	}
+}

@@ -1,0 +1,56 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true,
+		"defaultBranch": "main"
+	},
+	"files": {
+		"include": ["server/src/**", "server/test/**", "web/src/**", "shared/src/**", "web/*.ts", "server/*.ts"],
+		"ignore": ["**/node_modules/**", "**/dist/**"]
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"a11y": { "recommended": false },
+			"correctness": {
+				"noUnusedImports": "error",
+				"noUnusedVariables": "warn",
+				"noVoidTypeReturn": "off"
+			},
+			"style": {
+				"noNonNullAssertion": "off",
+				"useConst": "error",
+				"useNodejsImportProtocol": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "off",
+				"noControlCharactersInRegex": "off",
+				"noEmptyInterface": "off",
+				"noConstEnum": "off",
+				"noConfusingVoidType": "off"
+			}
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"indentWidth": 3,
+		"lineWidth": 120,
+		"lineEnding": "lf"
+	},
+	"javascript": {
+		"formatter": {
+			"semicolons": "always",
+			"quoteStyle": "double",
+			"trailingCommas": "all",
+			"bracketSpacing": true,
+			"arrowParentheses": "asNeeded"
+		}
+	},
+	"organizeImports": {
+		"enabled": true
+	}
+}

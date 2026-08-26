@@ -1,0 +1,12 @@
+{
+	"extends": "../tsconfig.base.json",
+	"compilerOptions": {
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"types": ["vite/client"],
+		"jsx": "react-jsx",
+		"paths": {
+			"@omp-web/shared": ["../shared/src/index.ts"]
+		}
+	},
+	"include": ["src", "vite.config.ts", "../shared/src"]
+}

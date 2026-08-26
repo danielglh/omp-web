@@ -1,0 +1,239 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Design tokens — Catppuccin.
+     dark  = Mocha (default)   https://catppuccin.com/palette/#mocha
+     light = Latte             https://catppuccin.com/palette/#latte
+   Tailwind v4 @theme registers the variables AND generates utilities like
+   `bg-surface-0`, `text-fg-0`. The `:root[data-theme]` blocks override the
+   same variables, so utilities carry the active theme at runtime.
+   ───────────────────────────────────────────────────────────────────────── */
+
+@theme {
+	--font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+	--font-ui: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+	/* ── Mocha (dark, default baseline) ────────────────────────────────── */
+	--color-surface-0: #1e1e2e; /* base     */
+	--color-surface-1: #181825; /* mantle   */
+	--color-surface-2: #313244; /* surface0 */
+	--color-surface-3: #45475a; /* surface1 */
+	--color-border: #313244; /*     surface0 */
+	--color-border-strong: #45475a; /* surface1 */
+
+	--color-fg-0: #cdd6f4; /* text     */
+	--color-fg-1: #bac2de; /* subtext1 */
+	--color-fg-2: #a6adc8; /* subtext0 */
+	--color-fg-3: #6c7086; /* overlay0 */
+
+	--color-on-accent: #1e1e2e; /* base */
+
+	/* Category accents (Mocha) */
+	--color-cat-conversation: #89dceb; /* sky     */
+	--color-cat-config: #cba6f7; /*        mauve   */
+	--color-cat-lifecycle: #a6adc8; /*    subtext0 */
+	--color-cat-subagent: #cba6f7; /*     mauve   */
+	--color-cat-approval: #fab387; /*     peach   */
+	--color-cat-ephemeral: #f9e2af; /*    yellow  */
+	--color-cat-meta: #b4befe; /*      lavender */
+	--color-cat-tools: #fab387; /*      peach   */
+
+	/* Conversation subfamily (Mocha) */
+	--color-user: #89b4fa; /*       blue   */
+	--color-assistant: #94e2d5; /*   teal   */
+	--color-tool: #fab387; /*      peach   */
+	--color-compaction: #eba0ac; /*   maroon */
+	--color-turn: #94e2d5; /*     teal   */
+
+	/* Severity (Mocha) */
+	--color-sev-info: #89b4fa; /*     blue   */
+	--color-sev-success: #a6e3a1; /*   green */
+	--color-sev-warning: #f9e2af; /*   yellow */
+	--color-sev-error: #f38ba8; /*     red   */
+}
+
+/* ── Latte (light) overrides ─────────────────────────────────────────────── */
+:root[data-theme="light"] {
+	color-scheme: light;
+
+	--color-surface-0: #eff1f5; /* base     */
+	--color-surface-1: #e6e9ef; /* mantle   */
+	--color-surface-2: #ccd0da; /* surface0 */
+	--color-surface-3: #bcc0cc; /* surface1 */
+	--color-border: #ccd0da; /*     surface0 */
+	--color-border-strong: #bcc0cc; /* surface1 */
+
+	--color-fg-0: #4c4f69; /* text     */
+	--color-fg-1: #5c5f77; /* subtext1 */
+	--color-fg-2: #6c6f85; /* subtext0 */
+	--color-fg-3: #9ca0b0; /* overlay0 */
+
+	--color-on-accent: #eff1f5; /* base */
+
+	/* Category accents (Latte) */
+	--color-cat-conversation: #04a5e5; /* sky   */
+	--color-cat-config: #8839ef; /*       mauve   */
+	--color-cat-lifecycle: #6c6f85; /*   subtext0 */
+	--color-cat-subagent: #8839ef; /*    mauve   */
+	--color-cat-approval: #fe640b; /*    peach   */
+	--color-cat-ephemeral: #df8e1d; /*   yellow  */
+	--color-cat-meta: #7287fd; /*     lavender */
+	--color-cat-tools: #fe640b; /*     peach   */
+
+	/* Conversation subfamily (Latte) */
+	--color-user: #1e66f5; /*      blue   */
+	--color-assistant: #179299; /*  teal   */
+	--color-tool: #fe640b; /*     peach   */
+	--color-compaction: #e64553; /*  maroon */
+	--color-turn: #179299; /*    teal   */
+
+	/* Severity (Latte) */
+	--color-sev-info: #1e66f5; /*    blue   */
+	--color-sev-success: #40a02b; /*  green */
+	--color-sev-warning: #df8e1d; /*  yellow */
+	--color-sev-error: #d20f39; /*    red   */
+}
+
+:root[data-theme="dark"] {
+	color-scheme: dark;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Base styles
+   ───────────────────────────────────────────────────────────────────────── */
+
+html,
+body,
+#root {
+	height: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--color-surface-0);
+	color: var(--color-fg-0);
+	font-family: var(--font-ui);
+	font-size: 13px;
+	-webkit-font-smoothing: antialiased;
+}
+
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+	background: var(--color-border-strong);
+	border-radius: 4px;
+}
+*::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+kbd {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	color: var(--color-fg-2);
+	background: var(--color-surface-2);
+	border: 1px solid var(--color-border);
+	border-bottom-width: 2px;
+	border-radius: 4px;
+	padding: 1px 5px;
+}
+
+/* Markdown body inside message bubbles */
+.md-body {
+	line-height: 1.65;
+	overflow-wrap: break-word;
+}
+.md-body > *:first-child {
+	margin-top: 0;
+}
+.md-body > *:last-child {
+	margin-bottom: 0;
+}
+.md-body p {
+	margin: 0.45em 0;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+	margin: 0.9em 0 0.4em;
+	font-weight: 600;
+	color: var(--color-fg-0);
+}
+.md-body h1 {
+	font-size: 1.25em;
+}
+.md-body h2 {
+	font-size: 1.12em;
+}
+.md-body h3 {
+	font-size: 1.02em;
+}
+.md-body code {
+	font-family: var(--font-mono);
+	font-size: 0.88em;
+	background: var(--color-surface-2);
+	border: 1px solid var(--color-border);
+	border-radius: 4px;
+	padding: 0.1em 0.35em;
+}
+.md-body pre {
+	background: var(--color-surface-2);
+	border: 1px solid var(--color-border);
+	border-radius: 6px;
+	padding: 10px 12px;
+	overflow-x: auto;
+	margin: 0.6em 0;
+}
+.md-body pre code {
+	background: transparent;
+	border: none;
+	padding: 0;
+	font-size: 0.85em;
+	line-height: 1.55;
+}
+.md-body a {
+	color: var(--color-cat-conversation);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.md-body ul,
+.md-body ol {
+	margin: 0.45em 0;
+	padding-left: 1.4em;
+}
+.md-body li {
+	margin: 0.2em 0;
+}
+.md-body blockquote {
+	margin: 0.6em 0;
+	padding-left: 0.9em;
+	border-left: 2px solid var(--color-border-strong);
+	color: var(--color-fg-1);
+}
+.md-body table {
+	border-collapse: collapse;
+	margin: 0.6em 0;
+	font-size: 0.92em;
+}
+.md-body th,
+.md-body td {
+	border: 1px solid var(--color-border);
+	padding: 4px 10px;
+	text-align: left;
+}
+.md-body th {
+	background: var(--color-surface-2);
+}
+.md-body hr {
+	border: none;
+	border-top: 1px solid var(--color-border);
+	margin: 1em 0;
+}
