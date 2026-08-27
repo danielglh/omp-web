@@ -35,8 +35,13 @@ export function sessionPrefixFor(expectedToken: string): string {
 	return createHmac("sha256", expectedToken).update("omp-web-session-v1").digest("hex");
 }
 
-export function sessionCookieHeader(value: string): string {
-	return `${AUTH_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_COOKIE_MAX_AGE}`;
+export function sessionCookieHeader(value: string, secure = false): string {
+	return `${AUTH_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_COOKIE_MAX_AGE}${secure ? "; Secure" : ""}`;
+}
+
+/** Expiring twin of {@link sessionCookieHeader}, used on logout. */
+export function clearedSessionCookieHeader(secure = false): string {
+	return `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 }
 
 export function parseCookies(header: string | null): Map<string, string> {

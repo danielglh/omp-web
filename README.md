@@ -146,9 +146,10 @@ How it behaves:
   link inside a session cwd cannot read outside it.
 - Rotating the token immediately invalidates all existing sessions. Changing
   the token (file or env) requires a server restart to take effect.
-- The cookie is not `Secure`-flagged so plain-HTTP LAN use works; behind an
-  HTTPS reverse proxy, add HSTS at the proxy. Always use TLS on untrusted
-  networks.
+- The session cookie is flagged `Secure` automatically when a login arrives
+  with `X-Forwarded-Proto: https` (i.e. behind an HTTPS reverse proxy). Pin the
+  behavior with `OMP_WEB_SECURE_COOKIE=true|false` — only trust forwarded
+  headers that your own proxy sets. Always use TLS on untrusted networks.
 
 Reminder: a session with a running agent can execute tools on the server.
 Treat the UI as a remote shell and keep the token private.
@@ -161,6 +162,7 @@ holds `authToken`):
 | Variable           | Default      | Meaning                                    |
 | ------------------ | ------------ | ------------------------------------------ |
 | `OMP_WEB_TOKEN`    | —            | Access token (overrides `config.json`)     |
+| `OMP_WEB_SECURE_COOKIE` | `auto`  | Flag session cookies `Secure`: `true`, `false`, or `auto` (= login arrives with `X-Forwarded-Proto: https`) |
 | `OMP_WEB_PORT`     | `7367`       | HTTP/WS port                               |
 | `OMP_WEB_HOST`     | `0.0.0.0`    | Bind address                               |
 | `OMP_WEB_DATA_DIR` | `~/.omp-web` | Server state (registry, auth, assistant)   |
@@ -215,19 +217,16 @@ token as described above before exposing the port.
 
 Next up, in planned order:
 
-1. **`Secure` cookie auto-detection** — when a login reaches us through an HTTPS
-   reverse proxy (`X-Forwarded-Proto: https`), flag the session cookie `Secure`
-   automatically; overridable via `OMP_WEB_SECURE_COOKIE`.
-2. **Assistant host-tools** — expose omp-web management operations (list /
+1. **Assistant host-tools** — expose omp-web management operations (list /
    create / delete sessions) to the omp assistant through omp's
    `host_tool_call` side channel, instead of only shelling out to the omp CLI.
-3. **E2E smoke suite** — a Playwright pass (login → create session → streamed
+2. **E2E smoke suite** — a Playwright pass (login → create session → streamed
    prompt → approve dialog → logout) against the mock RPC host, gated in CI.
-4. **Transcript pagination** — page long histories via `get_messages_page`
+3. **Transcript pagination** — page long histories via `get_messages_page`
    cursors instead of materializing every message at once.
-5. **Persistent open_url dismissal** — dismissed login links stay dismissed
+4. **Persistent open_url dismissal** — dismissed login links stay dismissed
    across reconnects.
-6. **Login attempt throttling** — small backoff on repeated wrong-token logins.
+5. **Login attempt throttling** — small backoff on repeated wrong-token logins.
 
 Shelved: reusing omp's `collab-web` render components for richer tool cards —
 revisit once upstream offers something stable to depend on.

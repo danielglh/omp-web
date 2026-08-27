@@ -56,7 +56,6 @@ const socketFactory = (url: string): WebSocket => {
 
 // SessionStore and request() touch `window` for popups and auth events.
 const windowCalls: { open: string[]; events: string[] } = { open: [], events: [] };
-// biome-ignore lint/suspicious/noExplicitAny: installing a minimal window stub for bun's runtime
 (globalThis as any).window = {
 	open: (url: string) => windowCalls.open.push(url),
 	dispatchEvent: (event: Event) => windowCalls.events.push(event.type),
