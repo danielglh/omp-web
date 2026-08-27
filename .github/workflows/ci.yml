@@ -29,8 +29,9 @@ jobs:
         run: bun run check
 
       # Coverage gates: thresholds are a ratchet — only ever raised.
+      # (`=` syntax is required: space-separated numbers parse as test filters.)
       - name: Tests with coverage gates
         run: |
           set -e
-          cd server && bun test --coverage --coverage-threshold 93
-          cd ../web && bun test --coverage --coverage-threshold 90
+          cd server && bun test --coverage --coverage-threshold=93
+          cd ../web && bun test --coverage --coverage-threshold=90
