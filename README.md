@@ -211,9 +211,23 @@ Then open `http://<server>:7367`. If a reverse proxy (nginx/Caddy) terminates
 TLS, forward `/api` and `/ws` (WebSocket upgrade) to the server. Set the auth
 token as described above before exposing the port.
 
-## Roadmap ideas
+## Roadmap
 
-- Assistant host-tools: let the omp assistant call omp-web's own management
-  API (sessions, registry) instead of just the omp CLI.
-- Reuse omp's `collab-web` tool-render components for richer tool cards.
-- `Secure` cookie auto-detection when served over HTTPS.
+Next up, in planned order:
+
+1. **`Secure` cookie auto-detection** — when a login reaches us through an HTTPS
+   reverse proxy (`X-Forwarded-Proto: https`), flag the session cookie `Secure`
+   automatically; overridable via `OMP_WEB_SECURE_COOKIE`.
+2. **Assistant host-tools** — expose omp-web management operations (list /
+   create / delete sessions) to the omp assistant through omp's
+   `host_tool_call` side channel, instead of only shelling out to the omp CLI.
+3. **E2E smoke suite** — a Playwright pass (login → create session → streamed
+   prompt → approve dialog → logout) against the mock RPC host, gated in CI.
+4. **Transcript pagination** — page long histories via `get_messages_page`
+   cursors instead of materializing every message at once.
+5. **Persistent open_url dismissal** — dismissed login links stay dismissed
+   across reconnects.
+6. **Login attempt throttling** — small backoff on repeated wrong-token logins.
+
+Shelved: reusing omp's `collab-web` render components for richer tool cards —
+revisit once upstream offers something stable to depend on.
