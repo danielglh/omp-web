@@ -28,11 +28,17 @@ export interface ServerConfig {
 	authToken: string;
 	/** Where the effective authToken came from (for the startup log). */
 	authTokenSource: "cli" | "env" | "file" | "disabled";
+	/**
+	 * Mark session cookies `Secure`: true always, false never, "auto" only when
+	 * a login arrives with `X-Forwarded-Proto: https`.
+	 */
+	secureCookie: boolean | "auto";
 }
 
 /** Values read from `<dataDir>/config.json` (unknown keys are ignored). */
 interface ConfigFileValues {
 	authToken?: string;
+	secureCookie?: boolean | "auto";
 }
 
 function envPath(name: string, fallback: string): string {
@@ -60,6 +66,17 @@ function readConfigFile(dataDir: string): ConfigFileValues {
 	}
 }
 
+function resolveSecureCookie(raw: unknown): boolean | "auto" | undefined {
+	if (raw === true || raw === false || raw === "auto") return raw;
+	if (typeof raw === "string") {
+		const lowered = raw.trim().toLowerCase();
+		if (lowered === "true") return true;
+		if (lowered === "false") return false;
+		if (lowered === "auto") return "auto";
+	}
+	return undefined;
+}
+
 function resolveAuthToken(
 	overrides: Partial<ServerConfig>,
 	dataDir: string,
@@ -81,6 +98,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
 	const webDistDir = path.resolve(
 		overrides.webDistDir ?? envPath("OMP_WEB_DIST_DIR", path.join(import.meta.dir, "..", "..", "web", "dist")),
 	);
+	const configFileValues = readConfigFile(dataDir);
 	return {
 		host: overrides.host ?? envPath("OMP_WEB_HOST", "0.0.0.0"),
 		port: overrides.port ?? Number(envPath("OMP_WEB_PORT", "7367")),
@@ -91,6 +109,11 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
 		ompExtraArgs: overrides.ompExtraArgs ?? process.env.OMP_WEB_OMP_ARGS?.split(/\s+/) ?? [],
 		mockMode: overrides.mockMode ?? process.env.OMP_WEB_MOCK === "1",
 		mockScriptPath: overrides.mockScriptPath ?? path.join(import.meta.dir, "..", "scripts", "mock-rpc-host.ts"),
+		secureCookie:
+			resolveSecureCookie(overrides.secureCookie) ??
+			resolveSecureCookie(process.env.OMP_WEB_SECURE_COOKIE) ??
+			resolveSecureCookie(configFileValues.secureCookie) ??
+			"auto",
 		...resolveAuthToken(overrides, dataDir),
 	};
 }

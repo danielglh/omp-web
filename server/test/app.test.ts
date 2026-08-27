@@ -544,3 +544,79 @@ test("auth: logout expires the cookie and revokes replayed values", async () => 
 		server.stop(true);
 	}
 });
+
+// ── Secure cookie auto-detection ─────────────────────────────────────────────
+
+function loginWithSecureApp(
+	config: ReturnType<typeof loadConfig>,
+	extraHeaders: Record<string, string> = {},
+): Promise<{ loginStatus: number; setCookie: string }> {
+	const manager = new SessionManager(config);
+	return manager.load().then(async () => {
+		const { server } = createApp({ config, manager });
+		const base = `http://127.0.0.1:${server.port}`;
+		try {
+			const login = await fetch(`${base}/api/auth`, {
+				method: "POST",
+				headers: { "content-type": "application/json", ...extraHeaders },
+				body: JSON.stringify({ token: String(config.authToken) }),
+			});
+			const logout = await fetch(`${base}/api/auth/logout`, {
+				method: "POST",
+				headers: { "x-forwarded-proto": extraHeaders["x-forwarded-proto"] ?? "" },
+			});
+			return {
+				loginStatus: login.status,
+				setCookie: `${login.headers.get("set-cookie") ?? ""}|${logout.headers.get("set-cookie") ?? ""}`,
+			};
+		} finally {
+			void manager.shutdown();
+			server.stop(true);
+		}
+	});
+}
+
+test("auth: Secure cookie is auto-detected from X-Forwarded-Proto", async () => {
+	const config = loadConfig({
+		dataDir: tempDir,
+		port: 0,
+		host: "127.0.0.1",
+		mockMode: true,
+		webDistDir: tempDir,
+		authToken: "secure-auto-tok",
+	});
+
+	const https = await loginWithSecureApp(config, { "x-forwarded-proto": "https" });
+	expect(https.loginStatus).toBe(200);
+	expect(https.setCookie).toContain("Secure");
+
+	const plain = await loginWithSecureApp(config);
+	expect(plain.setCookie).not.toContain("Secure");
+});
+
+test("auth: secureCookie override beats X-Forwarded-Proto detection", async () => {
+	const forced = loadConfig({
+		dataDir: tempDir,
+		port: 0,
+		host: "127.0.0.1",
+		mockMode: true,
+		webDistDir: tempDir,
+		authToken: "secure-force-tok",
+		secureCookie: true,
+	});
+	const forcedOn = await loginWithSecureApp(forced);
+	expect(forcedOn.loginStatus).toBe(200);
+	expect(forcedOn.setCookie).toContain("Secure");
+
+	const disabled = loadConfig({
+		dataDir: tempDir,
+		port: 0,
+		host: "127.0.0.1",
+		mockMode: true,
+		webDistDir: tempDir,
+		authToken: "secure-off-tok",
+		secureCookie: false,
+	});
+	const forcedOff = await loginWithSecureApp(disabled, { "x-forwarded-proto": "https" });
+	expect(forcedOff.setCookie).not.toContain("Secure");
+});

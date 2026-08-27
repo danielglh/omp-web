@@ -8,6 +8,7 @@ import type { ServerWebSocket } from "bun";
 import {
 	AUTH_COOKIE,
 	AuthSessionStore,
+	clearedSessionCookieHeader,
 	parseCookies,
 	sessionCookieHeader,
 	sessionPrefixFor,
@@ -61,6 +62,13 @@ export function createApp(deps: AppDeps) {
 	const authSessions = new AuthSessionStore(config.dataDir);
 	const isAuthed = (req: Request): boolean =>
 		!authRequired || authSessions.has(authSessionPrefix, parseCookies(req.headers.get("cookie")).get(AUTH_COOKIE));
+
+	// "auto" trusts X-Forwarded-Proto — only meaningful when your own proxy is
+	// the thing setting that header.
+	const isSecureRequest = (req: Request): boolean =>
+		config.secureCookie === "auto"
+			? req.headers.get("x-forwarded-proto")?.toLowerCase() === "https"
+			: config.secureCookie === true;
 
 	const json = (body: unknown, status = 200) =>
 		new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -210,7 +218,7 @@ export function createApp(deps: AppDeps) {
 					status: 200,
 					headers: {
 						"content-type": "application/json",
-						"set-cookie": `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+						"set-cookie": clearedSessionCookieHeader(isSecureRequest(req)),
 					},
 				});
 			}
@@ -228,7 +236,7 @@ export function createApp(deps: AppDeps) {
 					status: 200,
 					headers: {
 						"content-type": "application/json",
-						"set-cookie": sessionCookieHeader(authSessions.issue(authSessionPrefix)),
+						"set-cookie": sessionCookieHeader(authSessions.issue(authSessionPrefix), isSecureRequest(req)),
 					},
 				});
 			}

@@ -42,4 +42,18 @@ describe("config file diagnostics", () => {
 		expect(config.authToken).toBe("");
 		expect(warns.some(w => w.includes("cannot read"))).toBe(true);
 	});
+
+	test("secureCookie resolves from the config file and beats nothing but loses to env", () => {
+		fs.writeFileSync(path.join(tempDir, "config.json"), JSON.stringify({ authToken: "t", secureCookie: true }), {
+			mode: 0o600,
+		});
+		expect(loadConfig({ dataDir: tempDir }).secureCookie).toBe(true);
+
+		process.env.OMP_WEB_SECURE_COOKIE = "false";
+		try {
+			expect(loadConfig({ dataDir: tempDir }).secureCookie).toBe(false);
+		} finally {
+			delete process.env.OMP_WEB_SECURE_COOKIE;
+		}
+	});
 });
