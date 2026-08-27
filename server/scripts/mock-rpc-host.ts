@@ -50,6 +50,9 @@ interface Pending {
 let pendingPrompt: Pending | undefined;
 let streamTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingLogin: { id?: string; providerId: string } | undefined;
+/** Names announced by the host via set_host_tools (assistant sessions). */
+let registeredHostTools: string[] = [];
+let hostToolAutoInvoked = false;
 
 function stopStream() {
 	clearTimeout(streamTimer);
@@ -303,6 +306,40 @@ function handleFrame(frame: unknown) {
 		case "compact":
 			respond("compact", { ok: true });
 			return;
+		case "set_host_tools": {
+			registeredHostTools = Array.isArray(obj.tools)
+				? (obj.tools as Array<Record<string, unknown>>).map(tool => String(tool?.name ?? "")).filter(Boolean)
+				: [];
+			write({
+				type: "notice",
+				level: "info",
+				source: "mock",
+				message: `mock: host tools registered (${registeredHostTools.join(", ") || "none"})`,
+			});
+			// Like an agent trying its first host tool right after setup.
+			if (!hostToolAutoInvoked && registeredHostTools.length > 0) {
+				hostToolAutoInvoked = true;
+				write({
+					type: "host_tool_call",
+					id: `mock-hostcall-${Date.now().toString(36)}`,
+					name: registeredHostTools[0],
+					arguments: {},
+				});
+			}
+			respond("set_host_tools", { count: registeredHostTools.length });
+			return;
+		}
+		case "host_tool_result": {
+			const content = typeof obj.content === "string" ? obj.content : JSON.stringify(obj.content ?? null);
+			write({
+				type: "notice",
+				level: "info",
+				source: "mock",
+				message: `mock: host tool result ${String(obj.name ?? "")}: ${content.slice(0, 140)}`,
+			});
+			respond("host_tool_result", {});
+			return;
+		}
 		case "set_session_name":
 			respond("set_session_name", { sessionName: String(obj.name ?? "") });
 			return;

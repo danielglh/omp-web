@@ -44,7 +44,9 @@ so it is safe to expose on a server once TLS is in front of it.
   describing omp's config system) so you can configure omp by conversation —
   "switch my default model to X", "disable these providers", … It follows the
   `modelRoles.default` model; use its ↺ reset to pick up config changes (and to
-  clear stale context).
+  clear stale context). The assistant also carries built-in host tools for
+  managing omp-web itself: list sessions and create, stop or delete them right
+  from the conversation.
 
 **Authentication** — token gate with server-side sessions and logout; see below.
 
@@ -217,16 +219,13 @@ token as described above before exposing the port.
 
 Next up, in planned order:
 
-1. **Assistant host-tools** — expose omp-web management operations (list /
-   create / delete sessions) to the omp assistant through omp's
-   `host_tool_call` side channel, instead of only shelling out to the omp CLI.
-2. **E2E smoke suite** — a Playwright pass (login → create session → streamed
+1. **E2E smoke suite** — a Playwright pass (login → create session → streamed
    prompt → approve dialog → logout) against the mock RPC host, gated in CI.
-3. **Transcript pagination** — page long histories via `get_messages_page`
+2. **Transcript pagination** — page long histories via `get_messages_page`
    cursors instead of materializing every message at once.
-4. **Persistent open_url dismissal** — dismissed login links stay dismissed
+3. **Persistent open_url dismissal** — dismissed login links stay dismissed
    across reconnects.
-5. **Login attempt throttling** — small backoff on repeated wrong-token logins.
+4. **Login attempt throttling** — small backoff on repeated wrong-token logins.
 
 Shelved: reusing omp's `collab-web` render components for richer tool cards —
 revisit once upstream offers something stable to depend on.

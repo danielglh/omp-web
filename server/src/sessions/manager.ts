@@ -16,6 +16,8 @@ import type { ApprovalMode, SessionInfo, SessionKind, SessionStatus, SessionSumm
 import { ensureAssistantWorkspace } from "../assistant";
 import type { ServerConfig } from "../config";
 import { deleteOmpSession } from "../fs";
+import type { HostToolResult } from "../host-tools";
+import { ASSISTANT_HOST_TOOLS, runHostToolCall } from "../host-tools";
 import { sanitizeForwardedFrame, spawnOmpProcess } from "../rpc/process";
 
 const APPROVAL_MODES = new Set(["always-ask", "write", "yolo"]);
@@ -314,6 +316,11 @@ export class SessionManager {
 		runtime.status = "running";
 		this.#emit(record);
 
+		// Assistant sessions get a management toolset announced to their agent.
+		if (record.kind === "assistant") {
+			ompProc.send({ type: "set_host_tools", tools: ASSISTANT_HOST_TOOLS });
+		}
+
 		if (!this.#config.mockMode) {
 			const waitResponse = (
 				command: string,
@@ -550,7 +557,46 @@ export class SessionManager {
 
 	// ── internals ────────────────────────────────────────────────────────────
 
+	/**
+	 * Assistant sessions own a small management toolset: when their agent
+	 * invokes one of those tools, the manager answers directly and the call
+	 * never reaches the browser or the replay buffer.
+	 */
+	#maybeInterceptHostToolCall(record: SessionRecord, frame: unknown): boolean {
+		if (
+			record.kind !== "assistant" ||
+			!isRecord(frame) ||
+			frame.type !== "host_tool_call" ||
+			typeof frame.id !== "string"
+		) {
+			return false;
+		}
+		const callId = frame.id;
+		const name = typeof frame.name === "string" ? frame.name : "";
+		const args = isRecord(frame.arguments) ? (frame.arguments as Record<string, unknown>) : {};
+		this.#answerHostToolCall(record.id, callId, name, args);
+		return true;
+	}
+
+	#answerHostToolCall(sessionId: string, callId: string, name: string, args: Record<string, unknown>): void {
+		const reply = (result: HostToolResult) => {
+			this.sendToProcess(sessionId, {
+				type: "host_tool_result",
+				id: callId,
+				name,
+				content: result.content,
+				isError: result.isError === true,
+			});
+		};
+		runHostToolCall(this, sessionId, name, args)
+			.then(reply)
+			.catch((error: unknown) => {
+				reply({ content: error instanceof Error ? error.message : String(error), isError: true });
+			});
+	}
+
 	#onFrame(record: SessionRecord, frame: unknown): void {
+		if (this.#maybeInterceptHostToolCall(record, frame)) return;
 		const runtime = this.#runtimeFor(record.id);
 		// Track message count from terminal message events for the summary line.
 		if (isRecord(frame) && frame.type === "message_end") {

@@ -63,6 +63,71 @@ async function seededManager(options: SeedOptions = {}): Promise<SessionManager>
 	return manager;
 }
 
+// ── assistant host tools over the bridge ─────────────────────────────────────
+
+describe("assistant host tools", () => {
+	let tempDir2: string;
+	let hostManager: SessionManager;
+	let sessionId: string;
+
+	beforeAll(async () => {
+		tempDir2 = fs.mkdtempSync(path.join(os.tmpdir(), "omp-hosttools-ws-"));
+		const config = loadConfig({
+			dataDir: path.join(tempDir2, "data"),
+			port: 0,
+			host: "127.0.0.1",
+			mockMode: true,
+			webDistDir: tempDir2,
+		});
+		hostManager = new SessionManager(config);
+		await hostManager.load();
+		const created = await hostManager.create({ cwd: tempDir2, assistant: true, name: "tools-assistant" });
+		sessionId = created.id;
+
+		const deadline = Date.now() + 15_000;
+		for (;;) {
+			const frames = hostManager.bufferedFrames(sessionId) as Array<Record<string, unknown>>;
+			const registered = frames.some(
+				f => f.type === "notice" && String(f.message ?? "").includes("host tools registered"),
+			);
+			const answered = frames.some(f => f.type === "notice" && String(f.message ?? "").includes("host tool result"));
+			if (registered && answered) return;
+			if (Date.now() > deadline) throw new Error(`host tool handshake never completed`);
+			await new Promise(r => setTimeout(r, 150));
+		}
+	}, 30_000);
+
+	afterAll(async () => {
+		await hostManager?.shutdown();
+		try {
+			fs.rmSync(tempDir2, { recursive: true, force: true });
+		} catch {
+			// best effort
+		}
+	});
+
+	test("the manager announces its toolset to the agent", () => {
+		const frames = hostManager.bufferedFrames(sessionId) as Array<Record<string, unknown>>;
+		const notice = frames.find(
+			f => f.type === "notice" && String(f.message ?? "").includes("host tools registered"),
+		) as { message?: string };
+		expect(notice.message).toContain("omp_web_list_sessions");
+	});
+
+	test("invoked host tool calls are intercepted before reaching clients", () => {
+		const frames = hostManager.bufferedFrames(sessionId) as Array<Record<string, unknown>>;
+		expect(frames.some(f => f.type === "host_tool_call")).toBe(false);
+	});
+
+	test("the agent receives the dispatcher's answer for its call", () => {
+		const frames = hostManager.bufferedFrames(sessionId) as Array<Record<string, unknown>>;
+		const resultNotice = frames.find(
+			f => f.type === "notice" && String(f.message ?? "").includes("mock: host tool result"),
+		) as { message?: string } | undefined;
+		expect(resultNotice?.message).toContain("omp_web_list_sessions");
+	});
+});
+
 describe("session delete data safety", () => {
 	test("delete removes the underlying omp session file and its artifacts", async () => {
 		const sessionFile = path.join(tempDir, "session-abc.jsonl");
