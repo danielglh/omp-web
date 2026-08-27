@@ -170,8 +170,17 @@ export function spawnOmpProcess(options: OmpProcessOptions): OmpProcess {
 		proc = spawnTyped(bin, args, cwd, { ...process.env, ...env });
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		// Surface the failure through `ready` instead of throwing: callers await
+		// `ready`, and a synchronous throw would leave that rejected promise
+		// unconsumed while their flow moves on.
 		settleReady(new Error(`failed to spawn ${bin}: ${message}`));
-		throw error;
+		return {
+			pid: undefined,
+			ready,
+			send() {},
+			async close() {},
+			kill() {},
+		};
 	}
 	const decoder = new RpcFrameDecoder();
 	let stderrBuffer = "";

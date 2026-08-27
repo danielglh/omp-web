@@ -236,6 +236,13 @@ function handleFrame(frame: unknown) {
 				],
 			});
 			return;
+		case "new_session": {
+			// Like a real agent: mint a fresh identity and report it back.
+			state.sessionId = `mock-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+			state.sessionFile = `/mock/sessions/${state.sessionId}`;
+			respond("new_session", { sessionId: state.sessionId, sessionFile: state.sessionFile });
+			return;
+		}
 		case "prompt":
 		case "steer":
 		case "follow_up":

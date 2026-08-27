@@ -42,7 +42,7 @@ export interface OmpSessionSummary {
 const CLI_TIMEOUT_MS = 20_000;
 
 /** Run the omp CLI and capture stdout; non-zero exit rejects with stderr. */
-export function runOmpCli(bin: string, args: string[]): Promise<string> {
+export function runOmpCli(bin: string, args: string[], timeoutMs: number = CLI_TIMEOUT_MS): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const proc = Bun.spawn([bin, ...args], {
 			cwd: os.homedir(),
@@ -53,7 +53,7 @@ export function runOmpCli(bin: string, args: string[]): Promise<string> {
 		const timer = setTimeout(() => {
 			proc.kill("SIGKILL");
 			reject(new Error(`omp ${args[0]} timed out`));
-		}, CLI_TIMEOUT_MS);
+		}, timeoutMs);
 		timer.unref?.();
 		proc.exited.then(async code => {
 			clearTimeout(timer);
@@ -109,13 +109,19 @@ export async function ompModelList(bin: string): Promise<OmpModelSummary[]> {
 
 const MAX_SESSION_SCAN = 1000;
 
+/** Where omp keeps session history; injectable so tests can point at a temp dir. */
+const DEFAULT_SESSIONS_ROOT = path.join(os.homedir(), ".omp", "agent", "sessions");
+
 /**
  * List resumable omp sessions whose header cwd matches. The encoded directory
  * name is not decoded — instead every file's header line (first 2 KiB) is read
  * and matched by its recorded `cwd`, which is robust across encodings.
  */
-export function listOmpSessions(cwd: string, limit = 100): OmpSessionSummary[] {
-	const sessionsRoot = path.join(os.homedir(), ".omp", "agent", "sessions");
+export function listOmpSessions(
+	cwd: string,
+	limit = 100,
+	sessionsRoot: string = DEFAULT_SESSIONS_ROOT,
+): OmpSessionSummary[] {
 	let dirs: fs.Dirent[];
 	try {
 		dirs = fs.readdirSync(sessionsRoot, { withFileTypes: true });
