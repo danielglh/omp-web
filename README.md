@@ -45,7 +45,8 @@ so it is safe to expose on a server once TLS is in front of it.
   "switch my default model to X", "disable these providers", … It follows the
   `modelRoles.default` model; use its ↺ reset to pick up config changes (and to
   clear stale context). The assistant also carries built-in host tools for
-  managing omp-web itself: list sessions and create, stop or delete them right
+  managing omp-web itself: list sessions; create them (with an approval tier,
+  a model or a resume target); start, stop, delete or rename them — all right
   from the conversation.
 
 **Authentication** — token gate with server-side sessions and logout; see below.
