@@ -6,7 +6,7 @@
  * files — UNLESS the session was opened from the history browser
  * (resumedFromHistory), in which case pre-existing user data must survive.
  */
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
