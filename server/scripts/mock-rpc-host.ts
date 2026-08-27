@@ -466,11 +466,11 @@ write({
 });
 
 let buffer = "";
-const decoderForLines = new TextDecoder();
+const byteDecoder = new TextDecoder();
 const input = process.stdin;
 input.setEncoding?.("utf8");
 input.on("data", (chunk: string | Buffer) => {
-	buffer += typeof chunk === "string" ? chunk : decoderForLines.decode(chunk);
+	buffer += typeof chunk === "string" ? chunk : byteDecoder.decode(chunk, { stream: true });
 	let newlineIndex: number;
 	// biome-ignore lint/suspicious/noAssignInExpressions: idiomatic line-splitting loop
 	while ((newlineIndex = buffer.indexOf("\n")) >= 0) {

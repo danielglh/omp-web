@@ -17,6 +17,7 @@ import type {
 	WireSessionState,
 	WireSubagentSnapshot,
 } from "@omp-web/shared";
+import { isHttpUrl } from "./lib/url";
 
 /** SessionStats from the get_session_stats RPC. */
 export interface SessionStats {
@@ -89,11 +90,8 @@ export const api = {
 		if (res.status === 401) throw new Error("invalid token");
 		if (!res.ok) throw new Error(`login failed (${res.status})`);
 	},
-	/** Clear the session cookie (server-side revocation + expire). */
-	authLogout: async (): Promise<void> => {
-		const res = await fetch("/api/auth/logout", { method: "POST" }).catch(() => undefined);
-		if (res && !res.ok) throw new Error(`logout failed (${res.status})`);
-	},
+	// NOTE: logout lives in lib/logout.ts (logoutDeterminesGate) — the button
+	// needs the follow-up auth probe to decide whether to re-gate.
 	listSessions: () => request<{ sessions: SessionSummary[] }>("/api/sessions").then(r => r.sessions),
 	createSession: (input: {
 		name?: string;
@@ -231,7 +229,7 @@ function sameMessage(a: WireMessage, b: WireMessage): boolean {
 	return true;
 }
 
-const emptySnapshot = (): SessionSnapshot => ({
+export const emptySnapshot = (): SessionSnapshot => ({
 	phase: "connecting",
 	messages: [],
 	toolExecutions: new Map(),
@@ -429,9 +427,12 @@ export class SessionStore {
 			case "tool_execution_end": {
 				const toolCallId = frame.toolCallId as string;
 				this.#mutate(s => {
+					// Replace the Map and the entry (never mutate in place) so each
+					// snapshot stays immutable for memoized consumers.
+					const next = new Map(s.toolExecutions);
 					const existing = s.toolExecutions.get(toolCallId);
 					if (type === "tool_execution_start") {
-						s.toolExecutions.set(toolCallId, {
+						next.set(toolCallId, {
 							status: "running",
 							toolCallId,
 							toolName: frame.toolName as string,
@@ -440,14 +441,25 @@ export class SessionStore {
 							startedAt: Date.now(),
 						});
 					} else if (existing) {
-						if (type === "tool_execution_update") {
-							existing.result = frame.partialResult;
-						} else {
-							existing.status = "done";
-							existing.result = frame.result;
-							existing.isError = frame.isError === true;
-						}
+						next.set(
+							toolCallId,
+							type === "tool_execution_update"
+								? { ...existing, result: frame.partialResult }
+								: { ...existing, status: "done", result: frame.result, isError: frame.isError === true },
+						);
+					} else if (type === "tool_execution_end") {
+						// End without a witnessed start (mid-tool joiner): synthesize.
+						next.set(toolCallId, {
+							status: "done",
+							toolCallId,
+							toolName: frame.toolName as string,
+							args: frame.args,
+							result: frame.result,
+							isError: frame.isError === true,
+							startedAt: Date.now(),
+						});
 					}
+					s.toolExecutions = next;
 				});
 				break;
 			}
@@ -701,8 +713,12 @@ export class SessionStore {
 						{ at: Date.now(), url: frame.url, launchUrl: frame.launchUrl, instructions: frame.instructions },
 					];
 				});
-				// Best effort; popup blockers leave the rendered link as fallback.
-				window.open(frame.url, "_blank", "noopener");
+				// Agent-supplied URL: only absolute http(s) may auto-open. Anything
+				// else still surfaces in the card so the user can inspect it.
+				if (isHttpUrl(frame.url)) {
+					// Best effort; popup blockers leave the rendered link as fallback.
+					window.open(frame.url, "_blank", "noopener");
+				}
 				break;
 			}
 			// setTitle is TUI-terminal-title only; nothing to do on the web.
@@ -777,10 +793,17 @@ export class SessionStore {
 }
 
 // ── store registry ──────────────────────────────────────────────────────────
+//
+// Stores are reference-counted so a session's WebSocket lives exactly as long
+// as some React tree owns it: every acquire must be paired with one release,
+// and the final release closes the socket and drops the snapshot.
 
 const stores = new Map<string, SessionStore>();
+const storeRefs = new Map<string, number>();
 
-export function getSessionStore(sessionId: string): SessionStore {
+/** Take ownership of the session's store, creating it on first use. */
+export function acquireSessionStore(sessionId: string): SessionStore {
+	storeRefs.set(sessionId, (storeRefs.get(sessionId) ?? 0) + 1);
 	let store = stores.get(sessionId);
 	if (!store) {
 		store = new SessionStore(sessionId);
@@ -789,7 +812,14 @@ export function getSessionStore(sessionId: string): SessionStore {
 	return store;
 }
 
-export function releaseSessionStore(sessionId: string) {
+/** Drop one ownership reference; the last release closes the connection. */
+export function releaseSessionStore(sessionId: string): void {
+	const remaining = (storeRefs.get(sessionId) ?? 0) - 1;
+	if (remaining > 0) {
+		storeRefs.set(sessionId, remaining);
+		return;
+	}
+	storeRefs.delete(sessionId);
 	const store = stores.get(sessionId);
 	if (store) {
 		store.close();

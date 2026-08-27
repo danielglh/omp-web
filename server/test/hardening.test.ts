@@ -1,0 +1,340 @@
+/**
+ * Hardening suite: covers fixes surfaced in the pre-release code review.
+ *
+ *  - static file guard rejects sibling-directory traversal (`/x/%2e%2e/dist-*`)
+ *    and malformed percent-escapes (%zz) instead of leaking files / 500-ing
+ *  - state-changing requests carrying Sec-Fetch-Site: cross-site are refused
+ *  - PATCH /api/sessions/:id validates JSON + name type (400, not 500)
+ *  - /api/fs/file resolves symlinks so links cannot escape session cwds, and
+ *    always delivers HTML downloads as attachments with a sandbox CSP
+ *  - RPC stdout decoding survives multi-byte UTF-8 sequences split across read
+ *    chunks (createLineDecoder)
+ */
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createApp } from "../src/app";
+import { loadConfig } from "../src/config";
+import { createLineDecoder } from "../src/rpc/process";
+import { SessionManager } from "../src/sessions/manager";
+import { resolveStaticPath, serveStatic } from "../src/static";
+
+let tempDir: string;
+let baseUrl: string;
+let manager: SessionManager;
+
+beforeAll(async () => {
+	tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-web-hardening-"));
+	const config = loadConfig({
+		dataDir: path.join(tempDir, "data"),
+		port: 0,
+		host: "127.0.0.1",
+		mockMode: true,
+		webDistDir: tempDir,
+	});
+	manager = new SessionManager(config);
+	await manager.load();
+	const { server } = createApp({ config, manager });
+	baseUrl = `http://127.0.0.1:${server.port}`;
+
+	// Sibling directory whose name extends webDistDir's basename: reachable only
+	// because startsWith(root) matched the shared prefix, not a path boundary.
+	const evilSibling = `${tempDir}-eviltwin`;
+	fs.mkdirSync(evilSibling, { recursive: true });
+	fs.writeFileSync(path.join(evilSibling, "secret.txt"), "TOPSECRET");
+});
+
+// Static-guard tests target resolveStaticPath directly: both HTTP clients and
+// Bun's URL parser collapse raw dot segments (even %-encoded ones) before the
+// handler sees them, so the only faithful way to exercise the guard is with
+// the exact pathname strings an origin would receive.
+const staticRoot = () => path.resolve(tempDir);
+
+afterAll(async () => {
+	await manager.shutdown();
+	try {
+		fs.rmSync(tempDir, { recursive: true, force: true });
+		fs.rmSync(`${tempDir}-eviltwin`, { recursive: true, force: true });
+	} catch {
+		// best effort
+	}
+});
+
+// ── static file serving ──────────────────────────────────────────────────────
+
+test("static guard: sibling directory traversal is rejected", () => {
+	const baseName = path.basename(tempDir);
+	// '/..' escapes dist itself, landing in a sibling whose NAME extends the
+	// dist basename — exactly the case a bare startsWith(root) used to pass.
+	const out = resolveStaticPath(staticRoot(), `/%2e%2e/${baseName}-eviltwin/secret.txt`);
+	expect(out.status === "forbidden").toBe(true);
+	const inner = resolveStaticPath(staticRoot(), "/app.js");
+	expect(inner.status === "ok").toBe(true);
+});
+
+test("static guard: raw dot-dot paths are rejected too", () => {
+	for (const p of ["/assets/../../etc/passwd", "/%2e%2e/%2e%2e/etc/passwd", "/..%2f..%2fetc/passwd"]) {
+		const resolved = resolveStaticPath(staticRoot(), p);
+		expect(resolved.status === "ok" ? resolved.fullPath : "blocked").not.toContain("etc/passwd");
+	}
+});
+
+test("static: still serves existing files and SPA fallback", () => {
+	fs.writeFileSync(path.join(tempDir, "app.js"), "console.log(1)");
+	expect(serveStatic(new Request("http://omp.test/app.js"), tempDir).status).toBe(200);
+	const spa = serveStatic(new Request("http://omp.test/sessions/whatever"), tempDir);
+	expect(spa.status).toBe(200);
+	return spa.text().then(body => expect(body).toContain("omp-web"));
+});
+
+test("static: malformed percent-escape resolves to not-found, not a thrown error", () => {
+	expect(resolveStaticPath(staticRoot(), "/%zzzz").status).toBe("not_found");
+});
+
+// ── cross-site request policy ────────────────────────────────────────────────
+
+test("cross-site state-changing requests are refused; plain requests are not", async () => {
+	const crossRes = await fetch(`${baseUrl}/api/sessions`, {
+		method: "POST",
+		headers: { "content-type": "application/json", "sec-fetch-site": "cross-site" },
+		body: JSON.stringify({ cwd: tempDir }),
+	});
+	expect(crossRes.status).toBe(403);
+
+	// Same operation without the marker (curl / same-origin fetch) proceeds.
+	const okRes = await fetch(`${baseUrl}/api/sessions`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ cwd: tempDir }),
+	});
+	expect(okRes.status).toBe(201);
+	const created = (await okRes.json()) as { session: { id: string } };
+
+	// Reads stay navigable (an external link to a download must keep working).
+	const getRes = await fetch(`${baseUrl}/api/sessions`, { headers: { "sec-fetch-site": "cross-site" } });
+	expect(getRes.status).toBe(200);
+
+	await jsonDelete(created.session.id);
+});
+
+async function jsonDelete(id: string): Promise<void> {
+	await fetch(`${baseUrl}/api/sessions/${id}`, { method: "DELETE" });
+}
+
+// ── PATCH input validation ───────────────────────────────────────────────────
+
+async function createSession(name: string): Promise<string> {
+	const res = await fetch(`${baseUrl}/api/sessions`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ cwd: tempDir, name }),
+	});
+	expect(res.status).toBe(201);
+	const body = (await res.json()) as { session: { id: string } };
+	return body.session.id;
+}
+
+test("PATCH with invalid JSON body yields 400", async () => {
+	const id = await createSession("patch-invalid-json");
+	const res = await fetch(`${baseUrl}/api/sessions/${id}`, {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: "{not json",
+	});
+	expect(res.status).toBe(400);
+	await jsonDelete(id);
+});
+
+test("PATCH with non-string name yields 400", async () => {
+	const id = await createSession("patch-bad-name");
+	const res = await fetch(`${baseUrl}/api/sessions/${id}`, {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ name: 123 }),
+	});
+	expect(res.status).toBe(400);
+	await jsonDelete(id);
+});
+
+test("PATCH with a valid name still renames", async () => {
+	const id = await createSession("patch-ok");
+	const res = await fetch(`${baseUrl}/api/sessions/${id}`, {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ name: "renamed-session" }),
+	});
+	expect(res.status).toBe(200);
+	const body = (await res.json()) as { session: { name: string } };
+	expect(body.session.name).toBe("renamed-session");
+	await jsonDelete(id);
+});
+
+// ── /api/fs/file: symlinks + HTML disposition ────────────────────────────────
+
+describe("fs file endpoint", () => {
+	let sessionId: string;
+	let cwd: string;
+
+	beforeAll(async () => {
+		cwd = path.join(tempDir, "fsfile-cwd");
+		fs.mkdirSync(cwd, { recursive: true });
+		fs.writeFileSync(path.join(cwd, "page.html"), "<script>alert('boom')</script><p>hi</p>");
+		try {
+			fs.symlinkSync("/etc/passwd", path.join(cwd, "leak.txt"));
+		} catch {
+			// filesystems without symlink support (rare in CI) — test self-skips
+		}
+		sessionId = await createSession("fs-file-fixture");
+	});
+
+	afterAll(async () => {
+		if (sessionId) await jsonDelete(sessionId);
+	});
+
+	test("symlinked file inside a session cwd cannot escape it", async () => {
+		if (!fs.existsSync(path.join(cwd, "leak.txt"))) return;
+		const res = await fetch(`${baseUrl}/api/fs/file?path=${encodeURIComponent(path.join(cwd, "leak.txt"))}`);
+		expect(res.status).toBe(403);
+		expect(await res.text()).not.toContain("root:"); // no /etc/passwd content
+	});
+
+	test("files under a session cwd download as attachments (never inline HTML)", async () => {
+		const res = await fetch(`${baseUrl}/api/fs/file?path=${encodeURIComponent(path.join(cwd, "page.html"))}`);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-disposition") ?? "").toStartWith("attachment");
+		expect(res.headers.get("content-security-policy")).toContain("sandbox");
+	});
+});
+
+// ── UTF-8 chunk-boundary decoding ────────────────────────────────────────────
+
+test("line decoder reassembles multibyte characters split across chunks", () => {
+	const lines: string[] = [];
+	const decoder = createLineDecoder(line => lines.push(line));
+	const encoder = new TextEncoder();
+	const full = encoder.encode('{"t":"你好"}\n{"t":"🚀"}\nplain\n');
+	// Cut inside 你 (byte offset 8 lands mid-codepoint) and inside 🚀 again.
+	decoder.push(full.subarray(0, 8));
+	decoder.push(full.subarray(8, 14));
+	decoder.push(full.subarray(14));
+	expect(lines).toEqual(['{"t":"你好"}', '{"t":"🚀"}', "plain"]);
+});
+
+// ── reconnect dialog replay ──────────────────────────────────────────────────
+//
+// The per-session frame ring buffer exists so a mid-turn joiner can resync,
+// but it must not resurrect interactive dialogs that were already answered:
+// an answered extension_ui_request is no longer live session state.
+
+describe("reconnect dialog replay", () => {
+	const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+	async function waitRunning(sessionId: string): Promise<void> {
+		const deadline = Date.now() + 20_000;
+		while (Date.now() < deadline) {
+			const res = await fetch(`${baseUrl}/api/sessions/${sessionId}`);
+			const body = (await res.json()) as { session?: { status: string } };
+			if (body.session?.status === "running" || body.session?.status === "error") return;
+			await sleep(200);
+		}
+		throw new Error("session did not start");
+	}
+
+	/** Frames arrive wrapped as {type:"event", frame}; unwrap for predicates. */
+	function unwrap(raw: Record<string, unknown>): Record<string, unknown> {
+		const inner = raw.frame;
+		return (typeof inner === "object" && inner !== null ? inner : raw) as Record<string, unknown>;
+	}
+
+	interface Sock {
+		ws: WebSocket;
+		frames: Record<string, unknown>[];
+	}
+
+	function openSocket(sessionId: string): Promise<Sock> {
+		return new Promise((resolve, reject) => {
+			const ws = new WebSocket(`${baseUrl.replace("http", "ws")}/ws/sessions/${sessionId}`);
+			const sock: Sock = { ws, frames: [] };
+			ws.onmessage = event => {
+				sock.frames.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+			};
+			ws.onopen = () => resolve(sock);
+			ws.onerror = () => reject(new Error("ws open failed"));
+			setTimeout(() => reject(new Error("ws open timeout")), 10_000);
+		});
+	}
+
+	async function agentFrame(
+		sock: Sock,
+		predicate: (frame: Record<string, unknown>) => boolean,
+		timeoutMs = 10_000,
+	): Promise<Record<string, unknown>> {
+		const deadline = Date.now() + timeoutMs;
+		for (;;) {
+			const hit = sock.frames.map(unwrap).find(predicate);
+			if (hit) return hit;
+			if (Date.now() > deadline) throw new Error("timed out waiting for agent frame");
+			await sleep(100);
+		}
+	}
+
+	function closeSocket(sock: Sock): Promise<void> {
+		return new Promise(resolve => {
+			sock.ws.addEventListener("close", () => resolve(), { once: true });
+			sock.ws.close();
+		});
+	}
+
+	test("answered dialogs are pruned from the replay buffer", async () => {
+		const sessionId = await createSession("replay-answered");
+		try {
+			await waitRunning(sessionId);
+			const first = await openSocket(sessionId);
+			const request = await agentFrame(first, f => f.type === "extension_ui_request" && f.method === "select");
+			const requestId = String(request.id);
+			first.ws.send(
+				JSON.stringify({ type: "rpc", command: "extension_ui_response", id: requestId, value: "Approve" }),
+			);
+			// The mock echoes the answer as a notice — proves the answer landed.
+			await agentFrame(first, f => f.type === "notice" && String(f.message ?? "").includes("value=Approve"));
+			await closeSocket(first);
+			await sleep(300);
+
+			const second = await openSocket(sessionId);
+			await sleep(1_500); // let the replay burst arrive
+			const resurrected = second.frames
+				.map(unwrap)
+				.some(f => f.type === "extension_ui_request" && f.method === "select" && f.id === requestId);
+			expect(resurrected).toBe(false);
+			// Guard against a vacuous pass: passive process-scoped surfaces
+			// (widget, subagent snapshot) must still have been replayed.
+			const replayedSomething = second.frames
+				.map(unwrap)
+				.some(
+					f => f.type === "subagent_snapshot" || (f.type === "extension_ui_request" && f.method === "setWidget"),
+				);
+			expect(replayedSomething).toBe(true);
+			await closeSocket(second);
+		} finally {
+			await jsonDelete(sessionId);
+		}
+	}, 30_000);
+
+	test("unanswered dialogs still replay on reconnect", async () => {
+		const sessionId = await createSession("replay-unanswered");
+		try {
+			await waitRunning(sessionId);
+			const first = await openSocket(sessionId);
+			await agentFrame(first, f => f.type === "extension_ui_request" && f.method === "select");
+			await closeSocket(first);
+			await sleep(300);
+			const second = await openSocket(sessionId);
+			const again = await agentFrame(second, f => f.type === "extension_ui_request" && f.method === "select");
+			expect(String(again.id)).toBeTruthy();
+			await closeSocket(second);
+		} finally {
+			await jsonDelete(sessionId);
+		}
+	}, 30_000);
+});

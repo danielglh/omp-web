@@ -1,3 +1,4 @@
+import type { WireSubagentSnapshot } from "@omp-web/shared";
 import { GitBranch, Loader2 } from "lucide-react";
 import type { SessionSnapshot } from "../../api";
 import { formatDuration, formatTokens } from "../../lib/format";
@@ -17,8 +18,6 @@ export function SubagentPanel({ snapshot }: { snapshot: SessionSnapshot }) {
 		</div>
 	);
 }
-
-import type { WireSubagentSnapshot } from "@omp-web/shared";
 
 function SubagentRow({ sub }: { sub: WireSubagentSnapshot }) {
 	const running = sub.status === "running";

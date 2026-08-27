@@ -11,7 +11,7 @@ import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LogoutButton } from "../components/shared/LogoutButton";
 import { SettingsLink } from "../components/shared/SettingsLink";
 import { ThemeToggle } from "../components/shared/ThemeToggle";
-import { useSessionSnapshot, useSessionStore } from "../hooks";
+import { useLiveSession } from "../hooks";
 import { shortId } from "../lib/format";
 
 type TabId = "chat" | "agents" | "context";
@@ -25,8 +25,8 @@ const TABS: Array<{ id: TabId; label: string }> = [
 export function SessionDetailPage() {
 	const { sessionId } = useParams<{ sessionId: string }>();
 	const navigate = useNavigate();
-	const snapshot = useSessionSnapshot(sessionId ?? "");
-	const store = useSessionStore(sessionId ?? "");
+	const live = useLiveSession(sessionId ?? "");
+	const { snapshot, store } = live;
 	const [activeTab, setActiveTab] = React.useState<TabId>("chat");
 	// Desktop starts with the side column open; narrow screens start collapsed
 	// (there it opens as an overlay drawer instead).
@@ -64,8 +64,12 @@ export function SessionDetailPage() {
 		}
 	}, [sessionId, snapshot.session?.status]);
 
-	if (!sessionId) {
-		return <div className="p-6 font-mono text-[12px] text-fg-3">(no session id)</div>;
+	if (!sessionId || !store) {
+		return (
+			<div className="p-6 font-mono text-[12px] text-fg-3">
+				{sessionId ? "connecting to session…" : "(no session id)"}
+			</div>
+		);
 	}
 
 	const session = snapshot.session;

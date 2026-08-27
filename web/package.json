@@ -9,11 +9,11 @@
 		"dev": "vite",
 		"build": "vite build",
 		"preview": "vite preview",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"test": "bun test"
 	},
 	"dependencies": {
 		"@omp-web/shared": "workspace:*",
-		"@tanstack/react-virtual": "^3.13.5",
 		"lucide-react": "^0.475.0",
 		"marked": "^15.0.0",
 		"react": "^19.1.0",

@@ -1,20 +1,13 @@
 /**
  * Markdown renderer with the same safety posture as omp's collab-web:
- * raw HTML is escaped (never emitted), links are restricted to safe schemes,
- * external links open in a new tab.
+ * raw HTML is escaped (never emitted), link AND image destinations are
+ * restricted to safe schemes, external links open in a new tab, and image alt
+ * text is always attribute-escaped.
  */
 import { Marked } from "marked";
 import { memo, useMemo } from "react";
 import type { ReactNode } from "react";
-
-function escapeHtml(s: string): string {
-	return s
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&#39;");
-}
+import { escapeHtml, safeHref } from "./url";
 
 function unescapeHtml(raw: string): string {
 	const parseCodePoint = (value: number): string => {
@@ -51,13 +44,6 @@ function unescapeHtml(raw: string): string {
 	});
 }
 
-function safeHref(href: string): string | null {
-	const trimmed = href.trim();
-	if (/^(?:https?:|mailto:)/i.test(trimmed)) return trimmed;
-	if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return null; // unknown scheme (javascript:, data:, …)
-	return trimmed; // relative / fragment
-}
-
 const md = new Marked({
 	gfm: true,
 	breaks: true,
@@ -74,17 +60,28 @@ const md = new Marked({
 			const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
 			return `<a href="${escapeHtml(url)}"${titleAttr} target="_blank" rel="noopener">${inner}</a>`;
 		},
+		image({ href, title, tokens }) {
+			const text = this.parser.parseInline(tokens, this.parser.textRenderer);
+			const url = safeHref(href);
+			// Unsafe destination → render only the alt text, never an <img>.
+			if (url === null) return escapeHtml(text);
+			const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
+			return `<img src="${escapeHtml(url)}" alt="${escapeHtml(text)}"${titleAttr}>`;
+		},
 	},
 });
 
+/** Render untrusted agent markdown to an HTML string (safe for innerHTML). */
+export function renderMarkdown(text: string): string {
+	try {
+		return md.parse(text, { async: false }) as string;
+	} catch {
+		return escapeHtml(text);
+	}
+}
+
 export const Markdown = memo(function Markdown({ text, className }: { text: string; className?: string }): ReactNode {
-	const html = useMemo(() => {
-		try {
-			return md.parse(text, { async: false }) as string;
-		} catch {
-			return escapeHtml(text);
-		}
-	}, [text]);
+	const html = useMemo(() => renderMarkdown(text), [text]);
 	// biome-ignore lint/security/noDangerouslySetInnerHtml: raw HTML is escaped by the renderer above
 	return <div className={className ? `md-body ${className}` : "md-body"} dangerouslySetInnerHTML={{ __html: html }} />;
 });

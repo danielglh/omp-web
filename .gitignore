@@ -15,3 +15,6 @@ data/
 .DS_Store
 .idea/
 .vscode/
+
+# local test evidence
+gui-test-screenshots/
