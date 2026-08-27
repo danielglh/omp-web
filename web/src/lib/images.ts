@@ -53,6 +53,10 @@ async function fileToAttachment(file: File): Promise<ImageAttachment | undefined
 		canvas.height = Math.max(1, Math.round(bitmap.height * scale));
 		const ctx = canvas.getContext("2d");
 		if (!ctx) throw new Error("no 2d context");
+		// JPEG has no alpha channel — fill white first so transparent regions
+		// don't turn black after the re-encode.
+		ctx.fillStyle = "#ffffff";
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
 		ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 		const dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
 		const data = dataUrl.slice(dataUrl.indexOf(",") + 1);

@@ -16,7 +16,7 @@
 		"start": "bun run --cwd server start",
 		"typecheck": "bun run --cwd shared typecheck && bun run --cwd server typecheck && bun run --cwd web typecheck",
 		"check": "biome check . && bun run typecheck",
-		"test": "bun run --cwd server test"
+		"test": "bun run --cwd server test && bun run --cwd web test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",

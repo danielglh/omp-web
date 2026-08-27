@@ -7,7 +7,16 @@
 		"defaultBranch": "main"
 	},
 	"files": {
-		"include": ["server/src/**", "server/test/**", "web/src/**", "shared/src/**", "web/*.ts", "server/*.ts"],
+		"include": [
+			"server/src/**",
+			"server/test/**",
+			"server/scripts/**",
+			"web/src/**",
+			"web/test/**",
+			"shared/src/**",
+			"web/*.ts",
+			"server/*.ts"
+		],
 		"ignore": ["**/node_modules/**", "**/dist/**"]
 	},
 	"linter": {

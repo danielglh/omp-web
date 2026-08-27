@@ -135,7 +135,13 @@ How it behaves:
   upgrades require it.
 - Sessions are server-side and revocable: logout (icon next to the theme
   toggle) revokes that session; re-login issues a fresh one. Live sessions
-  persist across server restarts (`auth-sessions.json`).
+  persist across server restarts (`auth-sessions.json`) and expire
+  server-side after 30 days, matching the cookie.
+- State-changing requests stamped `Sec-Fetch-Site: cross-site` by the browser
+  are refused (drive-by/CSRF hardening); plain reads and links keep working.
+- Downloads from `/api/fs/file` always arrive as attachments (agent-authored
+  HTML never executes on this origin), and paths resolve through symlinks so a
+  link inside a session cwd cannot read outside it.
 - Rotating the token immediately invalidates all existing sessions. Changing
   the token (file or env) requires a server restart to take effect.
 - The cookie is not `Secure`-flagged so plain-HTTP LAN use works; behind an
@@ -182,12 +188,15 @@ Checks:
 
 ```sh
 bun run check          # biome (lint + format) + typecheck across packages
-bun run test           # server E2E suite against the mock host (no omp needed)
+bun run test           # server E2E suite (mock host) + web unit tests; no omp needed
 ```
 
 The E2E suite covers session lifecycle, WS bridging + hydration, extension-UI
 roundtrips, approvals, config/models endpoints, assistant seeding, branching,
-login flow, and auth (gate, cookie exchange, logout revocation, re-login).
+login flow, auth (gate, cookie exchange, logout revocation, re-login, expiry),
+and the security-hardening behaviors (traversal guard, cross-site refusal,
+input validation, symlink-safe downloads). The web package adds unit tests for
+the markdown/URL safety gates (`web/test/`).
 
 ## Production
 

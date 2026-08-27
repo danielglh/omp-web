@@ -99,6 +99,33 @@ function spawnTyped(bin: string, args: string[], cwd: string, env: Record<string
 const DEFAULT_READY_TIMEOUT_MS = 45_000;
 const DEFAULT_CLOSE_GRACE_MS = 5_000;
 
+export interface LineDecoder {
+	/** Feed one raw read chunk (bytes or pre-decoded text). */
+	push(chunk: string | Uint8Array): void;
+}
+
+/**
+ * Newline-splitting decoder with stream-safe UTF-8 handling: a multi-byte
+ * character split across two read chunks is kept pending instead of being
+ * corrupted into U+FFFD (which a fresh TextDecoder per chunk would produce).
+ */
+export function createLineDecoder(onLine: (line: string) => void): LineDecoder {
+	const byteDecoder = new TextDecoder();
+	let buffer = "";
+	return {
+		push(chunk: string | Uint8Array) {
+			buffer += typeof chunk === "string" ? chunk : byteDecoder.decode(chunk, { stream: true });
+			let newlineIndex = buffer.indexOf("\n");
+			while (newlineIndex >= 0) {
+				const line = buffer.slice(0, newlineIndex).trim();
+				buffer = buffer.slice(newlineIndex + 1);
+				if (line.length > 0) onLine(line);
+				newlineIndex = buffer.indexOf("\n");
+			}
+		},
+	};
+}
+
 export function isForwardableCommand(value: unknown): value is { type: string } {
 	if (typeof value !== "object" || value === null) return false;
 	const type = (value as { type?: unknown }).type;
@@ -147,65 +174,56 @@ export function spawnOmpProcess(options: OmpProcessOptions): OmpProcess {
 		throw error;
 	}
 	const decoder = new RpcFrameDecoder();
-	let stdoutBuffer = "";
 	let stderrBuffer = "";
 	/** Transport protocol version in effect (2 = chunked framing for big frames). */
 	let protocolVersion = 1;
 	const negotiateId = `srv-negotiate-${Math.random().toString(36).slice(2)}`;
 
-	const onStdoutData = (chunk: string) => {
-		stdoutBuffer += chunk;
-		let newlineIndex: number;
-		// biome-ignore lint/suspicious/noAssignInExpressions: idiomatic line-splitting loop
-		while ((newlineIndex = stdoutBuffer.indexOf("\n")) >= 0) {
-			const line = stdoutBuffer.slice(0, newlineIndex);
-			stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-			const trimmed = line.trim();
-			if (trimmed.length === 0) continue;
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(trimmed);
-			} catch {
-				// A non-JSON stdout line (e.g. an ANSI notice) breaks the protocol
-				// channel; surface it as an error frame instead of killing the bridge.
-				onFrame({ type: "protocol_line", raw: trimmed });
-				continue;
-			}
-			try {
-				const frame = decoder.push(parsed);
-				if (frame) {
-					onFrame(frame);
-					if (isRecord(frame) && frame.type === "ready") {
-						// Negotiate v2 right away so oversized frames (prompts with
-						// images, large get_messages responses) survive the 1 MB cap.
-						if (!readySettled) settleReady();
-						writeCommand({ id: negotiateId, type: "negotiate_protocol", protocolVersion: 2 });
-					}
-					if (
-						isRecord(frame) &&
-						frame.type === "response" &&
-						frame.command === "negotiate_protocol" &&
-						frame.id === negotiateId &&
-						frame.success === true
-					) {
-						protocolVersion = 2;
-					}
+	const handleLine = (trimmed: string) => {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch {
+			// A non-JSON stdout line (e.g. an ANSI notice) breaks the protocol
+			// channel; surface it as an error frame instead of killing the bridge.
+			onFrame({ type: "protocol_line", raw: trimmed });
+			return;
+		}
+		try {
+			const frame = decoder.push(parsed);
+			if (frame) {
+				onFrame(frame);
+				if (isRecord(frame) && frame.type === "ready") {
+					// Negotiate v2 right away so oversized frames (prompts with
+					// images, large get_messages responses) survive the 1 MB cap.
+					if (!readySettled) settleReady();
+					writeCommand({ id: negotiateId, type: "negotiate_protocol", protocolVersion: 2 });
 				}
-			} catch (error) {
-				onFrame({
-					type: "protocol_error",
-					error: error instanceof Error ? error.message : String(error),
-				});
+				if (
+					isRecord(frame) &&
+					frame.type === "response" &&
+					frame.command === "negotiate_protocol" &&
+					frame.id === negotiateId &&
+					frame.success === true
+				) {
+					protocolVersion = 2;
+				}
 			}
+		} catch (error) {
+			onFrame({
+				type: "protocol_error",
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	};
+	const stdoutLines = createLineDecoder(handleLine);
 
-	const onStderrData = (chunk: string) => {
-		stderrBuffer += chunk;
+	const stderrLines = createLineDecoder(chunk => {
+		stderrBuffer += `${chunk}\n`;
 		onStderr?.(chunk);
 		// Keep the buffer bounded (diagnostics only; omp logs to ~/.omp logs too).
 		if (stderrBuffer.length > 512 * 1024) stderrBuffer = stderrBuffer.slice(-256 * 1024);
-	};
+	});
 
 	if (proc.stdout) {
 		const reader = proc.stdout.getReader();
@@ -213,8 +231,8 @@ export function spawnOmpProcess(options: OmpProcessOptions): OmpProcess {
 			reader
 				.read()
 				.then(({ done, value }) => {
-					if (done) return;
-					onStdoutData(new TextDecoder().decode(value));
+					if (done || !value) return;
+					stdoutLines.push(value);
 					pump();
 				})
 				.catch(() => {});
@@ -227,8 +245,8 @@ export function spawnOmpProcess(options: OmpProcessOptions): OmpProcess {
 			reader
 				.read()
 				.then(({ done, value }) => {
-					if (done) return;
-					onStderrData(new TextDecoder().decode(value));
+					if (done || !value) return;
+					stderrLines.push(value);
 					pump();
 				})
 				.catch(() => {});

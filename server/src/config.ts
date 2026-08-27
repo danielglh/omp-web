@@ -94,5 +94,3 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
 		...resolveAuthToken(overrides, dataDir),
 	};
 }
-
-export const DEFAULT_PORT = 7367;

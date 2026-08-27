@@ -1,6 +1,7 @@
 import { Check, Loader2, RotateCw, Search } from "lucide-react";
 import * as React from "react";
 import { api } from "../api";
+import { ROLE_THINKING_LEVELS, joinRoleValue, parseRoleValue } from "../lib/modelRoles";
 
 interface ConfigEntry {
 	key: string;
@@ -194,13 +195,15 @@ function ModelRolesCard({
 			<div className="border-b border-border px-4 py-2.5">
 				<div className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-fg-0">model roles</div>
 				<div className="mt-0.5 font-mono text-[9.5px] text-fg-3">
-					which model each agent role uses — <span className="text-cat-subagent">default</span> drives new sessions
-					and the omp assistant (reset the assistant ↺ after changing it)
+					which model each agent role uses, plus an optional pinned thinking level (stored as
+					<code className="mx-1 rounded bg-surface-2 px-1">provider/model:level</code>) —
+					<span className="text-cat-subagent"> default</span> drives new sessions and the omp assistant (reset the
+					assistant ↺ after changing it)
 				</div>
 			</div>
-			<div className="grid grid-cols-1 gap-x-4 gap-y-2 px-4 py-3 sm:grid-cols-2">
+			<div className="grid grid-cols-1 gap-y-2 px-4 py-3">
 				{MODEL_ROLE_KEYS.map(role => (
-					<label key={role} className="flex items-center gap-2">
+					<div key={role} className="flex items-center gap-2">
 						<span
 							className={`w-16 shrink-0 text-right font-mono text-[10.5px] ${role === "default" ? "text-cat-subagent" : "text-fg-3"}`}
 							title={role === "default" ? "Used by new sessions and the omp assistant" : undefined}
@@ -209,13 +212,34 @@ function ModelRolesCard({
 						</span>
 						<input
 							list="omp-model-options"
-							value={draft[role] ?? ""}
+							value={parseRoleValue(draft[role]).model}
 							placeholder={role === "default" ? "(omp built-in default)" : "(inherit default)"}
-							onChange={e => setDraft(d => ({ ...d, [role]: e.target.value }))}
+							onChange={e =>
+								setDraft(d => ({
+									...d,
+									[role]: joinRoleValue(e.target.value, parseRoleValue(d[role]).thinking),
+								}))
+							}
 							className="min-w-0 flex-1 rounded border border-border bg-surface-0 px-2 py-1 font-mono text-[11px] text-fg-0 outline-none placeholder:text-fg-3 focus:border-cat-conversation"
 							spellCheck={false}
 						/>
-					</label>
+						<select
+							value={parseRoleValue(draft[role]).thinking}
+							aria-label={`${role} thinking level`}
+							title={`Pinned thinking level for ${role} (stored as provider/model:level)`}
+							onChange={e =>
+								setDraft(d => ({ ...d, [role]: joinRoleValue(parseRoleValue(d[role]).model, e.target.value) }))
+							}
+							className="w-28 shrink-0 rounded border border-border bg-surface-0 px-2 py-1 font-mono text-[10.5px] text-fg-0 outline-none focus:border-cat-conversation"
+						>
+							<option value="">default</option>
+							{ROLE_THINKING_LEVELS.map(level => (
+								<option key={level} value={level}>
+									{level}
+								</option>
+							))}
+						</select>
+					</div>
 				))}
 			</div>
 			<datalist id="omp-model-options">

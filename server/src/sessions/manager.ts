@@ -10,6 +10,7 @@
  * late joiner can re-sync recent live activity; full history comes from
  * `get_messages` (issued per-connection by the WS layer).
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ApprovalMode, SessionInfo, SessionKind, SessionStatus, SessionSummary } from "@omp-web/shared";
 import { ensureAssistantWorkspace } from "../assistant";
@@ -447,14 +448,30 @@ export class SessionManager {
 	/**
 	 * Resolve a readable file path if it sits inside a known session's working
 	 * directory (serves export_html downloads without opening an arbitrary
-	 * file-read endpoint).
+	 * file-read endpoint). Both sides are resolved through symlinks first, so a
+	 * link planted inside the cwd cannot serve files from outside it.
 	 */
 	resolveFileUnderSessionCwd(target: string): { ok: true; path: string } | { ok: false; reason: string } {
-		const resolved = path.resolve(target);
+		const requested = path.resolve(target);
+		let candidate = requested;
+		try {
+			candidate = fs.realpathSync(requested);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException | null)?.code;
+			if (code !== "ENOENT") return { ok: false, reason: "cannot resolve path" };
+			// Missing target: keep the lexical path so the caller's existence
+			// check yields 404 (dangling symlinks included).
+		}
 		for (const record of this.#records.values()) {
-			const cwd = path.resolve(record.cwd);
-			if (resolved === cwd || resolved.startsWith(`${cwd}${path.sep}`)) {
-				return { ok: true, path: resolved };
+			const cwdRaw = path.resolve(record.cwd);
+			let cwd = cwdRaw;
+			try {
+				cwd = fs.realpathSync(cwdRaw);
+			} catch {
+				// cwd vanished — fall back to its recorded path
+			}
+			if (candidate === cwd || candidate.startsWith(`${cwd}${path.sep}`)) {
+				return { ok: true, path: candidate };
 			}
 		}
 		return { ok: false, reason: "path is outside any session working directory" };
@@ -486,10 +503,10 @@ export class SessionManager {
 	/** Forward a browser frame to the agent if whitelisted. */
 	forward(id: string, frame: unknown): { ok: boolean; reason?: string } {
 		const runtime = this.#runtime.get(id);
-		const process = runtime?.process;
-		if (!process) {
+		if (!runtime?.process) {
 			return { ok: false, reason: "session not running" };
 		}
+		const process = runtime.process;
 		const sanitized = sanitizeForwardedFrame(frame);
 		if (!sanitized) {
 			return { ok: false, reason: "command not allowed" };
@@ -503,6 +520,17 @@ export class SessionManager {
 			}
 		}
 		process.send(sanitized);
+		// An answered interactive dialog is no longer live session state: drop
+		// its request from the replay buffer so a reconnecting client doesn't
+		// resurrect it (same rationale as the process-exit sweep over
+		// {@link isProcessScopedFrame}).
+		if (sanitized.type === "extension_ui_response" && typeof sanitized.id === "string") {
+			const requestId = sanitized.id;
+			runtime.frameBuffer = runtime.frameBuffer.filter(
+				candidate =>
+					!(isRecord(candidate) && candidate.type === "extension_ui_request" && candidate.id === requestId),
+			);
+		}
 		return { ok: true };
 	}
 

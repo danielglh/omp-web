@@ -310,7 +310,7 @@ function SessionRail({
 						onCreated={session => {
 							setShowNew(null);
 							refresh();
-							window.location.href = `/sessions/${session.id}`;
+							navigate(`/sessions/${session.id}`);
 						}}
 					/>
 				) : null}

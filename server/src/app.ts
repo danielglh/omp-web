@@ -5,7 +5,14 @@ import { API_PREFIX, type ClientCommand, type ServerFrame } from "@omp-web/share
  * omp-web server application: REST API + session WebSocket + static web app.
  */
 import type { ServerWebSocket } from "bun";
-import { AUTH_COOKIE, AuthSessionStore, parseCookies, sessionCookieHeader, sessionPrefixFor, tokenEquals } from "./auth";
+import {
+	AUTH_COOKIE,
+	AuthSessionStore,
+	parseCookies,
+	sessionCookieHeader,
+	sessionPrefixFor,
+	tokenEquals,
+} from "./auth";
 import type { ServerConfig } from "./config";
 import { listDir, searchDir, searchPaths } from "./fs";
 import { listOmpSessions, ompConfigList, ompConfigPath, ompConfigReset, ompConfigSet, ompModelList } from "./omp";
@@ -59,13 +66,33 @@ export function createApp(deps: AppDeps) {
 		new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 	const jsonError = (message: string, status = 400) => json({ error: message }, status);
 
-	function connsFor(sessionId: string): Map<string, SessionConn> {
+	function ensureConns(sessionId: string): Map<string, SessionConn> {
 		let map = sessionConns.get(sessionId);
 		if (!map) {
 			map = new Map();
 			sessionConns.set(sessionId, map);
 		}
 		return map;
+	}
+
+	/** Existing connection table without creating one (read paths). */
+	function peekConns(sessionId: string): Map<string, SessionConn> | undefined {
+		return sessionConns.get(sessionId);
+	}
+
+	function connById(sessionId: string, connId: string): SessionConn | undefined {
+		return sessionConns.get(sessionId)?.get(connId);
+	}
+
+	/**
+	 * Cross-site state-change policy: browsers stamp Sec-Fetch-Site on every
+	 * request they make, so a cross-site marker on a mutating request (or a
+	 * WebSocket handshake) is a drive-by/CSRF attempt and gets dropped. Reads
+	 * stay open: cross-origin JS cannot read the responses (no CORS headers),
+	 * and plain links to downloads must keep working.
+	 */
+	function isCrossSite(req: Request): boolean {
+		return req.headers.get("sec-fetch-site") === "cross-site";
 	}
 
 	function sendToConn(conn: SessionConn | undefined, frame: ServerFrame) {
@@ -78,7 +105,9 @@ export function createApp(deps: AppDeps) {
 	}
 
 	function sendToSession(sessionId: string, frame: ServerFrame, exceptConnId?: string) {
-		for (const conn of connsFor(sessionId).values()) {
+		const map = peekConns(sessionId);
+		if (!map) return;
+		for (const conn of map.values()) {
 			if (conn.connId === exceptConnId) continue;
 			sendToConn(conn, frame);
 		}
@@ -87,8 +116,8 @@ export function createApp(deps: AppDeps) {
 	// Route agent frames: auto-hydration responses go to their own connection;
 	// everything else broadcasts to the session's connections.
 	manager.onFrame((sessionId, frame) => {
-		const map = connsFor(sessionId);
-		if (map.size === 0) return;
+		const map = peekConns(sessionId);
+		if (!map || map.size === 0) return;
 		if (isRecord(frame) && frame.type === "response" && typeof frame.id === "string") {
 			const id = frame.id as string;
 			for (const conn of map.values()) {
@@ -110,7 +139,7 @@ export function createApp(deps: AppDeps) {
 
 	async function handleWebSocket(socket: ServerWebSocket<ConnData>) {
 		const { sessionId, connId } = socket.data;
-		const map = connsFor(sessionId);
+		const map = ensureConns(sessionId);
 		const conn: SessionConn = { connId, socket };
 		map.set(connId, conn);
 		manager.registerConnection(sessionId, connId);
@@ -136,8 +165,6 @@ export function createApp(deps: AppDeps) {
 			const session = manager.get(sessionId);
 			if (session) socket.send(JSON.stringify({ type: "session", session } satisfies ServerFrame));
 		}
-
-		socket.subscribe(`sessions:${sessionId}`);
 	}
 
 	// ── HTTP routing ─────────────────────────────────────────────────────────
@@ -149,6 +176,7 @@ export function createApp(deps: AppDeps) {
 		// WebSocket upgrade.
 		const wsMatch = /^\/ws\/sessions\/([A-Za-z0-9_-]+)$/.exec(pathname);
 		if (wsMatch && req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+			if (isCrossSite(req)) return jsonError("cross-site request refused", 403);
 			if (!isAuthed(req)) return jsonError("unauthorized", 401);
 			const sessionId = wsMatch[1]!;
 			if (!manager.get(sessionId)) return jsonError("session not found", 404);
@@ -168,6 +196,10 @@ export function createApp(deps: AppDeps) {
 	}
 
 	async function handleApi(req: Request, url: URL): Promise<Response> {
+		// Mutating methods from a cross-site context are drive-by/CSRF attempts.
+		if (!["GET", "HEAD", "OPTIONS"].includes(req.method.toUpperCase()) && isCrossSite(req)) {
+			return jsonError("cross-site request refused", 403);
+		}
 		const parts = url.pathname.slice(API_PREFIX.length).split("/").filter(Boolean);
 
 		// Auth endpoints are the only routes reachable without a session cookie.
@@ -271,15 +303,26 @@ export function createApp(deps: AppDeps) {
 				const session = manager.get(id);
 				if (!session) return jsonError("session not found", 404);
 				if (req.method === "GET") {
-					return json({ session: { ...session, connections: connsFor(id).size } });
+					return json({ session: { ...session, connections: peekConns(id)?.size ?? 0 } });
 				}
 				if (req.method === "DELETE") {
 					await manager.delete(id);
 					return json({ ok: true });
 				}
 				if (req.method === "PATCH") {
-					const body = (await req.json()) as { name?: string };
-					const updated = await manager.update(id, { name: body.name });
+					let body: { name?: unknown } | undefined;
+					try {
+						body = (await req.json()) as { name?: unknown };
+					} catch {
+						return jsonError("invalid JSON body");
+					}
+					if (!body || typeof body !== "object") return jsonError("invalid JSON body");
+					if (body.name !== undefined && (typeof body.name !== "string" || body.name.trim().length === 0)) {
+						return jsonError("name must be a non-empty string");
+					}
+					const updated = await manager.update(id, {
+						name: typeof body.name === "string" ? body.name : undefined,
+					});
 					return json({ session: updated });
 				}
 				return jsonError("method not allowed", 405);
@@ -405,7 +448,9 @@ export function createApp(deps: AppDeps) {
 				return json(searchPaths(prefix, cwd));
 			}
 			// File download restricted to session working directories
-			// (export_html lands in the agent's cwd by default).
+			// (export_html lands in the agent's cwd by default). Always delivered
+			// as an attachment — inline HTML would execute agent-authored markup
+			// on this origin; the sandbox CSP is belt-and-braces.
 			if (parts[1] === "file" && req.method === "GET") {
 				const target = url.searchParams.get("path") ?? "";
 				if (!target) return jsonError("path is required");
@@ -413,12 +458,13 @@ export function createApp(deps: AppDeps) {
 				if (!resolved.ok) return jsonError(resolved.reason, 403);
 				const file = Bun.file(resolved.path);
 				if (!(await file.exists())) return jsonError("file not found", 404);
+				const isHtml = resolved.path.endsWith(".html");
+				const filename = path.basename(resolved.path).replace(/["\\/\r\n]/g, "_");
 				return new Response(file, {
 					headers: {
-						"content-type": resolved.path.endsWith(".html")
-							? "text/html; charset=utf-8"
-							: "application/octet-stream",
-						"content-disposition": `${url.searchParams.get("download") === "1" ? "attachment" : "inline"}; filename="${path.basename(resolved.path)}"`,
+						"content-type": isHtml ? "text/html; charset=utf-8" : "application/octet-stream",
+						"content-disposition": `attachment; filename="${filename}"`,
+						...(isHtml ? { "content-security-policy": "sandbox" } : {}),
 					},
 				});
 			}
@@ -443,7 +489,7 @@ export function createApp(deps: AppDeps) {
 			},
 			close(ws: ServerWebSocket<ConnData>) {
 				const { sessionId, connId } = ws.data;
-				connsFor(sessionId).delete(connId);
+				peekConns(sessionId)?.delete(connId);
 				manager.unregisterConnection(sessionId, connId);
 			},
 		},
@@ -455,7 +501,7 @@ export function createApp(deps: AppDeps) {
 		try {
 			msg = JSON.parse(typeof raw === "string" ? raw : new TextDecoder().decode(raw));
 		} catch {
-			sendToConn(connsFor(sessionId).get(ws.data.connId), {
+			sendToConn(connById(sessionId, ws.data.connId), {
 				type: "server_error",
 				message: "invalid JSON message",
 			});
@@ -469,7 +515,7 @@ export function createApp(deps: AppDeps) {
 				const { type: _envelopeType, id, command: name, ...rest } = command as Record<string, unknown>;
 				const result = manager.forward(sessionId, { type: name, id, ...rest });
 				if (!result.ok) {
-					sendToConn(connsFor(sessionId).get(ws.data.connId), {
+					sendToConn(connById(sessionId, ws.data.connId), {
 						type: "server_error",
 						message: result.reason ?? "failed to forward command",
 					});
@@ -486,11 +532,11 @@ export function createApp(deps: AppDeps) {
 				break;
 			case "refresh_session": {
 				const session = manager.get(sessionId);
-				if (session) sendToConn(connsFor(sessionId).get(ws.data.connId), { type: "session", session });
+				if (session) sendToConn(connById(sessionId, ws.data.connId), { type: "session", session });
 				break;
 			}
 			default:
-				sendToConn(connsFor(sessionId).get(ws.data.connId), {
+				sendToConn(connById(sessionId, ws.data.connId), {
 					type: "server_error",
 					message: `unknown command: ${String(command?.type)}`,
 				});
@@ -500,11 +546,17 @@ export function createApp(deps: AppDeps) {
 	return { server, address: server.hostname, port: server.port };
 }
 
+/** Successful version lookups are memoized per binary; failures retry. */
+const ompVersionCache = new Map<string, string>();
+
 async function detectOmpVersion(bin: string): Promise<string | undefined> {
+	const cached = ompVersionCache.get(bin);
+	if (cached !== undefined) return cached;
 	try {
 		const proc = Bun.spawn([bin, "--version"], { stdout: "pipe", stderr: "pipe" });
 		const text = await new Response(proc.stdout).text();
 		const first = text.trim().split("\n")[0];
+		if (first) ompVersionCache.set(bin, first);
 		return first || undefined;
 	} catch {
 		return undefined;

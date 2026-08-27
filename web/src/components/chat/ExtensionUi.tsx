@@ -2,6 +2,7 @@ import type { WireExtensionUiRequest } from "@omp-web/shared";
 import { Check, ExternalLink, Loader2, ShieldAlert, X } from "lucide-react";
 import * as React from "react";
 import type { SessionSnapshot, SessionStore } from "../../api";
+import { isHttpUrl } from "../../lib/url";
 
 type ActiveRequest = Extract<WireExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }> & {
 	receivedAt?: number;
@@ -25,31 +26,45 @@ export function ExtensionSurfaces({ store, snapshot }: { store: SessionStore; sn
 			{/* Local slash-command output (command_output frames) */}
 			{lastOutput ? <CommandOutput text={lastOutput.text} /> : null}
 
-			{/* open_url (login): clickable link + copyable loopback short URL */}
-			{snapshot.openUrls.map(link => (
-				<div
-					key={link.at}
-					className="flex items-center gap-2 rounded-lg border border-cat-meta/40 bg-surface-1 px-3 py-2"
-				>
-					<ExternalLink className="h-3.5 w-3.5 shrink-0 text-cat-meta" />
-					<div className="min-w-0 flex-1">
-						<a
-							href={link.url}
-							target="_blank"
-							rel="noreferrer"
-							className="block truncate font-mono text-[11px] text-cat-conversation hover:underline"
-						>
-							{link.instructions ?? link.url}
-						</a>
-						{link.launchUrl ? (
-							<span className="block truncate font-mono text-[9.5px] text-fg-3" title={link.launchUrl}>
-								copy: {link.launchUrl}
-							</span>
-						) : null}
+			{/* open_url (login): clickable link + copyable loopback short URL.
+			    Agent-supplied URL is only linkable when absolute http(s); anything
+			    else renders inert so it can't become a navigation payload. */}
+			{snapshot.openUrls.map(link => {
+				const hrefOk = isHttpUrl(link.url);
+				return (
+					<div
+						key={link.at}
+						className="flex items-center gap-2 rounded-lg border border-cat-meta/40 bg-surface-1 px-3 py-2"
+					>
+						<ExternalLink className="h-3.5 w-3.5 shrink-0 text-cat-meta" />
+						<div className="min-w-0 flex-1">
+							{hrefOk ? (
+								<a
+									href={link.url}
+									target="_blank"
+									rel="noreferrer"
+									className="block truncate font-mono text-[11px] text-cat-conversation hover:underline"
+								>
+									{link.instructions ?? link.url}
+								</a>
+							) : (
+								<span
+									title={`${link.url} (blocked: not an http(s) URL)`}
+									className="block truncate font-mono text-[11px] text-sev-warning"
+								>
+									{link.instructions ?? link.url} — blocked: not http(s)
+								</span>
+							)}
+							{link.launchUrl ? (
+								<span className="block truncate font-mono text-[9.5px] text-fg-3" title={link.launchUrl}>
+									copy: {link.launchUrl}
+								</span>
+							) : null}
+						</div>
+						<DismissButton onClick={() => store.dismissOpenUrl(link.at)} />
 					</div>
-					<DismissButton onClick={() => store.dismissOpenUrl(link.at)} />
-				</div>
-			))}
+				);
+			})}
 
 			{/* Persistent widgets (setWidget) */}
 			{widgetEntries.map(([key, widget]) => (

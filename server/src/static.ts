@@ -51,23 +51,53 @@ const FALLBACK_HTML = `<!doctype html>
 </body>
 </html>`;
 
+/**
+ * Decode a request path and resolve it inside `root`, applying the traversal
+ * guard. Separated from serveStatic so guard semantics are directly unit
+ * testable (HTTP layer URL parsers may collapse dot segments before we ever
+ * see them — the raw path is what an origin receives on other runtimes).
+ */
+export function resolveStaticPath(
+	root: string,
+	rawPathname: string,
+): { status: "not_found" } | { status: "forbidden" } | { status: "ok"; fullPath: string } {
+	let pathname: string;
+	try {
+		pathname = decodeURIComponent(rawPathname);
+	} catch {
+		// Malformed percent-escapes (e.g. /%zz) are simply not found.
+		return { status: "not_found" };
+	}
+	const resolved = path.resolve(root, `.${pathname}`);
+	// Compare INCLUDING the trailing separator so sibling directories whose
+	// name extends root's basename (e.g. dist-backup next to dist) cannot pass
+	// a plain startsWith(root) prefix check.
+	if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+		return { status: "forbidden" };
+	}
+	return { status: "ok", fullPath: resolved };
+}
+
 export function serveStatic(req: Request, webDistDir: string): Response {
 	const url = new URL(req.url);
-	let pathname = decodeURIComponent(url.pathname);
 
-	// Path traversal guard.
-	const root = path.resolve(webDistDir);
-	const resolved = path.resolve(root, `.${pathname}`);
-	if (!resolved.startsWith(root)) {
-		return new Response("forbidden", { status: 403 });
-	}
-
+	// SPA fallback keeps the friendly placeholder for the unparsed root too.
+	let pathname = url.pathname;
 	if (pathname === "/" || pathname === "") {
 		pathname = "/index.html";
 	}
 
+	const root = path.resolve(webDistDir);
+	const resolved = resolveStaticPath(root, pathname);
+	if (resolved.status === "forbidden") {
+		return new Response("forbidden", { status: 403 });
+	}
+	if (resolved.status === "not_found") {
+		return new Response("not found", { status: 404 });
+	}
+	const fullPath = resolved.fullPath;
+
 	// Serve an existing file (index.html at "/", hashed assets elsewhere).
-	const fullPath = path.join(root, pathname);
 	if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
 		const ext = path.extname(fullPath).toLowerCase();
 		return new Response(Bun.file(fullPath), {
