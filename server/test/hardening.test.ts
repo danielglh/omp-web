@@ -92,6 +92,13 @@ test("static: malformed percent-escape resolves to not-found, not a thrown error
 	expect(resolveStaticPath(staticRoot(), "/%zzzz").status).toBe("not_found");
 });
 
+test("static: missing dist directory serves the build-me placeholder", () => {
+	const missing = path.join(staticRoot(), "no-such-dist");
+	const res = serveStatic(new Request("http://omp.test/"), missing);
+	expect(res.status).toBe(200);
+	return res.text().then(body => expect(body).toContain("has not been built"));
+});
+
 // ── cross-site request policy ────────────────────────────────────────────────
 
 test("cross-site state-changing requests are refused; plain requests are not", async () => {
@@ -340,6 +347,80 @@ describe("reconnect dialog replay", () => {
 			await jsonDelete(sessionId);
 		}
 	}, 30_000);
+});
+
+// ── delete chain end-to-end: API → manager → filesystem ─────────────────────
+
+describe("delete chain end-to-end", () => {
+	let chainBase: string;
+	let fileA: string;
+	let artifactsA: string;
+	let fileB: string;
+
+	beforeAll(async () => {
+		const dataDir = path.join(tempDir, "data-chain");
+		fs.mkdirSync(dataDir, { recursive: true });
+		fileA = path.join(tempDir, "chain-session.jsonl");
+		artifactsA = path.join(tempDir, "chain-session");
+		fs.writeFileSync(fileA, '{"row":1}');
+		fs.mkdirSync(artifactsA);
+		fs.writeFileSync(path.join(artifactsA, "shot.png"), "x");
+		fileB = path.join(tempDir, "history-session.jsonl");
+		fs.writeFileSync(fileB, "pre-existing user data");
+
+		const registry = {
+			sessions: [
+				{
+					id: "chain-del",
+					name: "chain",
+					cwd: tempDir,
+					createdAt: 0,
+					updatedAt: 0,
+					messageCount: 0,
+					sessionFile: fileA,
+				},
+				{
+					id: "chain-resumed",
+					name: "resumed",
+					cwd: tempDir,
+					createdAt: 0,
+					updatedAt: 0,
+					messageCount: 0,
+					sessionFile: fileB,
+					resumedFromHistory: true,
+				},
+			],
+		};
+		fs.writeFileSync(path.join(dataDir, "sessions.json"), JSON.stringify(registry));
+
+		// mockMode off is the point: deletion must hit the real filesystem.
+		const config = loadConfig({
+			dataDir,
+			port: 0,
+			host: "127.0.0.1",
+			mockMode: false,
+			webDistDir: tempDir,
+			ompBin: "/definitely/not/used/delete-never-spawns",
+		});
+		const chainManager = new SessionManager(config);
+		await chainManager.load();
+		chainBase = `http://127.0.0.1:${createApp({ config, manager: chainManager }).server.port}`;
+	});
+
+	test("deleting a normal session removes the omp session file and artifacts over HTTP", async () => {
+		const res = await fetch(`${chainBase}/api/sessions/chain-del`, { method: "DELETE" });
+		expect(res.status).toBe(200);
+		expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+		expect(fs.existsSync(fileA)).toBe(false);
+		expect(fs.existsSync(artifactsA)).toBe(false);
+		expect((await fetch(`${chainBase}/api/sessions/chain-del`)).status).toBe(404);
+	});
+
+	test("deleting a resumed session keeps the pre-existing history file", async () => {
+		const res = await fetch(`${chainBase}/api/sessions/chain-resumed`, { method: "DELETE" });
+		expect(res.status).toBe(200);
+		expect(fs.readFileSync(fileB, "utf8")).toBe("pre-existing user data");
+	});
 });
 
 // ── filesystem picker endpoints ──────────────────────────────────────────────
