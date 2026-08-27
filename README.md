@@ -1,5 +1,7 @@
 # omp-web
 
+[![CI](https://github.com/danielglh/omp-web/actions/workflows/ci.yml/badge.svg)](https://github.com/danielglh/omp-web/actions/workflows/ci.yml)
+
 Run and operate [omp](https://omp.sh/) coding agents on a remote server through a
 browser UI. omp runs on the server; the web UI drives it — start sessions, prompt
 the agent, watch streaming transcripts with thinking blocks and tool-call cards,

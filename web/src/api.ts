@@ -207,8 +207,9 @@ export interface SessionSnapshot {
 	widgets: Record<string, { lines: string[]; placement?: string }>;
 	/** Persistent status-line entries (setStatus), keyed by statusKey. */
 	statusEntries: Record<string, string>;
-	/** open_url requests (login flows) not yet dismissed. */
-	openUrls: Array<{ at: number; url: string; launchUrl?: string; instructions?: string }>;
+	/** open_url requests (login flows) not yet dismissed. Identified by a
+	 * monotonic id — millisecond timestamps can collide. */
+	openUrls: Array<{ id: number; at: number; url: string; launchUrl?: string; instructions?: string }>;
 	/** Text output from local slash commands (command_output frames). */
 	commandOutputs: Array<{ at: number; text: string }>;
 	/** Composer prefill pushed by the agent (set_editor_text); seq bumps on change. */
@@ -229,6 +230,9 @@ function sameMessage(a: WireMessage, b: WireMessage): boolean {
 	return true;
 }
 
+/** Monotonic id for agent-pushed open_url cards (timestamps can collide). */
+let openUrlSeq = 0;
+
 export const emptySnapshot = (): SessionSnapshot => ({
 	phase: "connecting",
 	messages: [],
@@ -245,6 +249,18 @@ export const emptySnapshot = (): SessionSnapshot => ({
 	loginProviders: [],
 });
 
+export interface SessionStoreOptions {
+	/** Endpoint override (tests inject this instead of touching `location`). */
+	socketUrl?: (sessionId: string) => string;
+	/** Socket construction override (tests inject a fake transport). */
+	socketFactory?: (url: string) => WebSocket;
+}
+
+function defaultSocketUrl(sessionId: string): string {
+	const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+	return `${protocol}//${location.host}/ws/sessions/${sessionId}`;
+}
+
 export class SessionStore {
 	readonly sessionId: string;
 	#listeners = new Set<() => void>();
@@ -258,9 +274,13 @@ export class SessionStore {
 	/** In-flight streaming slots (from message_start/update/end). */
 	#liveMessages: RenderedMessage[] = [];
 	#historyApplied = false;
+	readonly #socketUrl: (sessionId: string) => string;
+	readonly #socketFactory: (url: string) => WebSocket;
 
-	constructor(sessionId: string) {
+	constructor(sessionId: string, options: SessionStoreOptions = {}) {
 		this.sessionId = sessionId;
+		this.#socketUrl = options.socketUrl ?? defaultSocketUrl;
+		this.#socketFactory = options.socketFactory ?? (url => new WebSocket(url));
 		this.#snapshot = emptySnapshot();
 		this.connect();
 	}
@@ -313,8 +333,7 @@ export class SessionStore {
 			s.phase = "connecting";
 			s.error = undefined;
 		});
-		const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-		const ws = new WebSocket(`${protocol}//${location.host}/ws/sessions/${this.sessionId}`);
+		const ws = this.#socketFactory(this.#socketUrl(this.sessionId));
 		this.#ws = ws;
 
 		ws.onopen = () => {
@@ -708,9 +727,10 @@ export class SessionStore {
 				break;
 			case "open_url": {
 				this.#mutate(s => {
+					const id = ++openUrlSeq;
 					s.openUrls = [
 						...s.openUrls.slice(-2),
-						{ at: Date.now(), url: frame.url, launchUrl: frame.launchUrl, instructions: frame.instructions },
+						{ id, at: Date.now(), url: frame.url, launchUrl: frame.launchUrl, instructions: frame.instructions },
 					];
 				});
 				// Agent-supplied URL: only absolute http(s) may auto-open. Anything
@@ -739,9 +759,9 @@ export class SessionStore {
 	}
 
 	/** Dismiss a rendered open_url link (login flow). */
-	dismissOpenUrl(at: number) {
+	dismissOpenUrl(id: number) {
 		this.#mutate(s => {
-			s.openUrls = s.openUrls.filter(link => link.at !== at);
+			s.openUrls = s.openUrls.filter(link => link.id !== id);
 		});
 	}
 
@@ -802,11 +822,11 @@ const stores = new Map<string, SessionStore>();
 const storeRefs = new Map<string, number>();
 
 /** Take ownership of the session's store, creating it on first use. */
-export function acquireSessionStore(sessionId: string): SessionStore {
+export function acquireSessionStore(sessionId: string, options?: SessionStoreOptions): SessionStore {
 	storeRefs.set(sessionId, (storeRefs.get(sessionId) ?? 0) + 1);
 	let store = stores.get(sessionId);
 	if (!store) {
-		store = new SessionStore(sessionId);
+		store = new SessionStore(sessionId, options);
 		stores.set(sessionId, store);
 	}
 	return store;

@@ -222,7 +222,13 @@ export class SessionManager {
 		const record = this.#records.get(id);
 		if (!record) throw new Error(`session ${id} not found`);
 		const runtime = this.#runtimeFor(id);
-		if (runtime.process) return this.#info(record);
+		// Already alive (or spawning): idempotent. An errored session retries
+		// from scratch — that's the UI's start button recovering a failure.
+		if (runtime.process && (runtime.status === "running" || runtime.status === "starting")) {
+			return this.#info(record);
+		}
+		runtime.process = undefined;
+		runtime.pid = undefined;
 		runtime.status = "starting";
 		runtime.error = undefined;
 		this.#emit(record);
@@ -296,7 +302,15 @@ export class SessionManager {
 		runtime.process = ompProc;
 		runtime.pid = ompProc.pid;
 
-		await ompProc.ready;
+		try {
+			await ompProc.ready;
+		} catch (error) {
+			// Spawn (or readiness) failed: drop the dead process handle so a
+			// later start() can retry from scratch.
+			runtime.process = undefined;
+			runtime.pid = undefined;
+			throw error;
+		}
 		runtime.status = "running";
 		this.#emit(record);
 

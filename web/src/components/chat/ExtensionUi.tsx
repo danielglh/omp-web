@@ -33,7 +33,7 @@ export function ExtensionSurfaces({ store, snapshot }: { store: SessionStore; sn
 				const hrefOk = isHttpUrl(link.url);
 				return (
 					<div
-						key={link.at}
+						key={link.id}
 						className="flex items-center gap-2 rounded-lg border border-cat-meta/40 bg-surface-1 px-3 py-2"
 					>
 						<ExternalLink className="h-3.5 w-3.5 shrink-0 text-cat-meta" />
@@ -61,7 +61,7 @@ export function ExtensionSurfaces({ store, snapshot }: { store: SessionStore; sn
 								</span>
 							) : null}
 						</div>
-						<DismissButton onClick={() => store.dismissOpenUrl(link.at)} />
+						<DismissButton onClick={() => store.dismissOpenUrl(link.id)} />
 					</div>
 				);
 			})}

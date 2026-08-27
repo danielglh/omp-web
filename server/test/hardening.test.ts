@@ -302,7 +302,10 @@ describe("reconnect dialog replay", () => {
 			await sleep(300);
 
 			const second = await openSocket(sessionId);
-			await sleep(1_500); // let the replay burst arrive
+			// Sentinel: the server's private auto-hydration response is queued
+			// AFTER every buffered replay frame on this socket, so once it
+			// arrives the replay burst is provably complete — no fixed sleep.
+			await agentFrame(second, f => f.type === "response" && String(f.id ?? "").startsWith("auto:state:"));
 			const resurrected = second.frames
 				.map(unwrap)
 				.some(f => f.type === "extension_ui_request" && f.method === "select" && f.id === requestId);
@@ -337,4 +340,156 @@ describe("reconnect dialog replay", () => {
 			await jsonDelete(sessionId);
 		}
 	}, 30_000);
+});
+
+// ── filesystem picker endpoints ──────────────────────────────────────────────
+
+describe("non-mock omp CLI bridge errors surface to clients", () => {
+	let bridgeBase: string;
+
+	beforeAll(async () => {
+		// A fake omp binary that always fails: the bridge must surface its
+		// stderr as a client-visible error instead of swallowing it.
+		const fakeBin = path.join(tempDir, "fake-omp-fail");
+		await Bun.write(fakeBin, '#!/usr/bin/env bun\nprocess.stderr.write("boom\\n");\nprocess.exit(3);\n');
+		fs.chmodSync(fakeBin, 0o755);
+		const config = loadConfig({
+			dataDir: path.join(tempDir, "data-cli"),
+			port: 0,
+			host: "127.0.0.1",
+			mockMode: false,
+			webDistDir: tempDir,
+			ompBin: fakeBin,
+		});
+		const bridgeManager = new SessionManager(config);
+		await bridgeManager.load();
+		bridgeBase = `http://127.0.0.1:${createApp({ config, manager: bridgeManager }).server.port}`;
+	});
+
+	test("config/models endpoints surface omp CLI errors", async () => {
+		const get = await fetch(`${bridgeBase}/api/config`);
+		expect(get.status).toBe(500);
+		expect(((await get.json()) as { error: string }).error).toContain("boom");
+
+		const put = await fetch(`${bridgeBase}/api/config`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ key: "a", value: "b" }),
+		});
+		expect(put.status).toBe(400);
+		expect(((await put.json()) as { error: string }).error).toContain("boom");
+
+		const del = await fetch(`${bridgeBase}/api/config?key=a`, { method: "DELETE" });
+		expect(del.status).toBe(400);
+		expect(((await del.json()) as { error: string }).error).toContain("boom");
+
+		const models = await fetch(`${bridgeBase}/api/models`);
+		expect(models.status).toBe(500);
+		expect(((await models.json()) as { error: string }).error).toContain("boom");
+	});
+});
+
+describe("fs picker endpoints", () => {
+	let pickerCwd: string;
+
+	beforeAll(async () => {
+		pickerCwd = path.join(tempDir, "fs-picker-cwd");
+		fs.mkdirSync(pickerCwd, { recursive: true });
+		fs.writeFileSync(path.join(pickerCwd, "page.html"), "<p>picker</p>");
+		fs.mkdirSync(path.join(pickerCwd, "subdir"));
+	});
+
+	test("list resolves path/parent and lists subdirectories", async () => {
+		const res = await fetch(`${baseUrl}/api/fs/list?path=${encodeURIComponent(pickerCwd)}`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { path: string; parent: string; dirs: string[] };
+		expect(body.path).toBe(pickerCwd);
+		expect(body.parent).toBe(path.dirname(pickerCwd));
+		expect(body.dirs).toEqual(["subdir"]);
+	});
+
+	test("list on a file or missing path yields 400", async () => {
+		expect(
+			(await fetch(`${baseUrl}/api/fs/list?path=${encodeURIComponent(path.join(pickerCwd, "page.html"))}`)).status,
+		).toBe(400);
+		expect((await fetch(`${baseUrl}/api/fs/list?path=/definitely/missing`)).status).toBe(400);
+	});
+
+	test("search matches directory names by basename prefix", async () => {
+		const res = await fetch(`${baseUrl}/api/fs/search?prefix=${encodeURIComponent(path.join(tempDir, "fs-pic"))}`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { matches: string[] };
+		expect(body.matches).toEqual([path.join(tempDir, "fs-picker-cwd")]);
+	});
+
+	test("paths lists files and dirs under a cwd", async () => {
+		const res = await fetch(`${baseUrl}/api/fs/paths?prefix=./&cwd=${encodeURIComponent(pickerCwd)}`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { matches: string[] };
+		expect(body.matches).toEqual([path.join(pickerCwd, "page.html"), `${path.join(pickerCwd, "subdir")}/`]);
+	});
+});
+
+// ── WS control messages ──────────────────────────────────────────────────────
+
+describe("ws control messages", () => {
+	let sessionId: string;
+
+	beforeAll(async () => {
+		sessionId = await createSession("ws-control");
+		const deadline = Date.now() + 20_000;
+		while (Date.now() < deadline) {
+			const detail = (await fetch(`${baseUrl}/api/sessions/${sessionId}`).then(r => r.json())) as {
+				session: { status: string };
+			};
+			if (detail.session.status === "running" || detail.session.status === "error") return;
+			await new Promise(resolve => setTimeout(resolve, 200));
+		}
+		throw new Error("ws-control session did not start");
+	});
+
+	afterAll(async () => {
+		if (sessionId) await jsonDelete(sessionId);
+	});
+
+	function openSocket(): Promise<WebSocket> {
+		return new Promise((resolve, reject) => {
+			const ws = new WebSocket(`${baseUrl.replace("http", "ws")}/ws/sessions/${sessionId}`);
+			ws.onopen = () => resolve(ws);
+			ws.onerror = () => reject(new Error("ws open failed"));
+			setTimeout(() => reject(new Error("ws open timeout")), 10_000);
+		});
+	}
+
+	test("refresh_session replies with a session snapshot", async () => {
+		const ws = await openSocket();
+		const reply = await new Promise<Record<string, unknown>>(resolve => {
+			ws.onmessage = event => {
+				const parsed = JSON.parse(String(event.data)) as Record<string, unknown>;
+				if (parsed.type === "session") resolve(parsed);
+			};
+			ws.send(JSON.stringify({ type: "refresh_session" }));
+		});
+		expect((reply.session as { id?: string }).id).toBe(sessionId);
+		ws.close();
+	});
+
+	test("stop_session stops the agent and broadcasts the stopped status", async () => {
+		const ws = await openSocket();
+		const stopped = await new Promise<Record<string, unknown>>(resolve => {
+			ws.onmessage = event => {
+				const parsed = JSON.parse(String(event.data)) as Record<string, unknown>;
+				if (parsed.type === "session" && (parsed.session as { status?: string }).status === "stopped") {
+					resolve(parsed);
+				}
+			};
+			ws.send(JSON.stringify({ type: "stop_session" }));
+		});
+		expect((stopped.session as { id?: string }).id).toBe(sessionId);
+		const detail = (await fetch(`${baseUrl}/api/sessions/${sessionId}`).then(r => r.json())) as {
+			session: { status: string };
+		};
+		expect(detail.session.status).toBe("stopped");
+		ws.close();
+	});
 });
