@@ -66,7 +66,7 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
-type ManagerLike = Pick<SessionManager, "list" | "get" | "create" | "delete" | "stop">;
+type ManagerLike = Pick<SessionManager, "list" | "get" | "create" | "start" | "update" | "delete" | "stop">;
 
 export async function runHostToolCall(
 	manager: ManagerLike,
