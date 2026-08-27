@@ -92,7 +92,7 @@ describe("assistant host tools", () => {
 			);
 			const answered = frames.some(f => f.type === "notice" && String(f.message ?? "").includes("host tool result"));
 			if (registered && answered) return;
-			if (Date.now() > deadline) throw new Error(`host tool handshake never completed`);
+			if (Date.now() > deadline) throw new Error("host tool handshake never completed");
 			await new Promise(r => setTimeout(r, 150));
 		}
 	}, 30_000);
