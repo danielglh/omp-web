@@ -82,4 +82,61 @@ describe("spawnOmpProcess lifecycle", () => {
 		await proc.close(150);
 		expect(frames.some(f => (f as { type?: string }).type === "ready")).toBe(true);
 	});
+
+	test("non-JSON agent output becomes protocol_line noise, not a crash", async () => {
+		const script = [
+			"console.log('\\u001b]0;banner title\\u0007');",
+			// Multibyte content doubles as a regression probe for chunk-safe decoding.
+			"console.log('【警告】Loading agent — 请稍候…');",
+			"console.log(JSON.stringify({ type: 'ready', protocolVersion: 1 }));",
+		].join("\n");
+		const frames: Array<Record<string, unknown>> = [];
+		const proc = spawnOmpProcess({
+			bin: process.execPath,
+			args: ["-e", script],
+			cwd: import.meta.dir,
+			onFrame: frame => frames.push(frame as Record<string, unknown>),
+			onExit: () => {},
+			readyTimeoutMs: 2_000,
+		});
+		const deadline = Date.now() + 3_000;
+		while (!frames.some(f => f.type === "ready") && Date.now() < deadline) {
+			await new Promise(r => setTimeout(r, 50));
+		}
+		await proc.close(150);
+
+		expect(frames.filter(f => f.type === "protocol_line").map(f => f.raw)).toEqual([
+			// Full OSC escape sequence, control characters included.
+			"\u001b]0;banner title\u0007",
+			"【警告】Loading agent — 请稍候…",
+		]);
+		expect(frames.some(f => f.type === "ready")).toBe(true); // bridge stayed alive
+	});
+
+	test("malformed rpc chunk metadata surfaces as a protocol_error frame", async () => {
+		const script = [
+			// byteLength below the 1 MB transport floor → decoder throws
+			'console.log(JSON.stringify({ type: "rpc_chunk", chunkId: "c", index: 0, count: 2, byteLength: 5, data: "YWJjZA==" }));',
+			"console.log(JSON.stringify({ type: 'ready', protocolVersion: 1 }));",
+		].join("\n");
+		const frames: Array<Record<string, unknown>> = [];
+		const proc = spawnOmpProcess({
+			bin: process.execPath,
+			args: ["-e", script],
+			cwd: import.meta.dir,
+			onFrame: frame => frames.push(frame as Record<string, unknown>),
+			onExit: () => {},
+			readyTimeoutMs: 2_000,
+		});
+		const deadline = Date.now() + 3_000;
+		while (!frames.some(f => f.type === "ready") && Date.now() < deadline) {
+			await new Promise(r => setTimeout(r, 50));
+		}
+		await proc.close(150);
+
+		const errors = frames.filter(f => f.type === "protocol_error");
+		expect(errors).toHaveLength(1);
+		expect(errors[0]?.error).toBe("invalid rpc chunk metadata");
+		expect(frames.some(f => f.type === "ready")).toBe(true);
+	});
 });
