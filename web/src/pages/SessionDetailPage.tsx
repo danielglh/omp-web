@@ -7,6 +7,7 @@ import { Composer } from "../components/chat/Composer";
 import { ExtensionSurfaces } from "../components/chat/ExtensionUi";
 import { Transcript } from "../components/chat/Transcript";
 import { ContextPanel } from "../components/context/ContextPanel";
+import { FilesPanel } from "../components/files/FilesPanel";
 import { ConfirmDialog } from "../components/shared/ConfirmDialog";
 import { LogoutButton } from "../components/shared/LogoutButton";
 import { SettingsLink } from "../components/shared/SettingsLink";
@@ -14,12 +15,13 @@ import { ThemeToggle } from "../components/shared/ThemeToggle";
 import { useLiveSession } from "../hooks";
 import { shortId } from "../lib/format";
 
-type TabId = "chat" | "agents" | "context";
+type TabId = "chat" | "agents" | "context" | "files";
 
 const TABS: Array<{ id: TabId; label: string }> = [
 	{ id: "chat", label: "chat" },
 	{ id: "agents", label: "agents" },
 	{ id: "context", label: "context" },
+	{ id: "files", label: "files" },
 ];
 
 export function SessionDetailPage() {
@@ -87,7 +89,7 @@ export function SessionDetailPage() {
 	const status = session?.status ?? "created";
 	const running = status === "running" || status === "starting";
 
-	const sideTabs: TabId[] = ["agents", "context"];
+	const sideTabs: TabId[] = ["agents", "context", "files"];
 	const sideTab = sideTabs.includes(activeTab) ? activeTab : "chat";
 
 	return (
@@ -217,6 +219,7 @@ export function SessionDetailPage() {
 						<div className="min-h-0 flex-1 overflow-y-auto">
 							{sideTab === "agents" ? <SubagentPanel snapshot={snapshot} /> : null}
 							{sideTab === "context" ? <ContextPanel store={store} snapshot={snapshot} /> : null}
+							{sideTab === "files" && session?.cwd ? <FilesPanel cwd={session.cwd} /> : null}
 						</div>
 					</aside>
 				</>

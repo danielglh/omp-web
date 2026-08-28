@@ -15,7 +15,7 @@ import {
 	tokenEquals,
 } from "./auth";
 import type { ServerConfig } from "./config";
-import { listDir, searchDir, searchPaths } from "./fs";
+import { isImagePath, listDir, listWorkspaceEntries, mimeForPath, readTextPreview, searchDir, searchPaths } from "./fs";
 import { listOmpSessions, ompConfigList, ompConfigPath, ompConfigReset, ompConfigSet, ompModelList } from "./omp";
 import { type SessionManager, isApprovalMode } from "./sessions/manager";
 import { serveStatic } from "./static";
@@ -473,6 +473,54 @@ export function createApp(deps: AppDeps) {
 						"content-type": isHtml ? "text/html; charset=utf-8" : "application/octet-stream",
 						"content-disposition": `attachment; filename="${filename}"`,
 						...(isHtml ? { "content-security-policy": "sandbox" } : {}),
+					},
+				});
+			}
+
+			// Workspace file manager: browse and preview files inside any
+			// registered session's working directory (realpath containment —
+			// symlinks cannot escape), same trust boundary as downloads above.
+			if (parts[1] === "entries" && req.method === "GET") {
+				const target = url.searchParams.get("path") ?? "";
+				if (!target) return jsonError("path is required");
+				const resolved = manager.resolveFileUnderSessionCwd(target);
+				if (!resolved.ok) return jsonError(resolved.reason, 403);
+				try {
+					return json({ path: resolved.path, entries: listWorkspaceEntries(resolved.path) });
+				} catch (error) {
+					return jsonError(error instanceof Error ? error.message : String(error), 400);
+				}
+			}
+
+			if (parts[1] === "preview" && req.method === "GET") {
+				const target = url.searchParams.get("path") ?? "";
+				if (!target) return jsonError("path is required");
+				const resolved = manager.resolveFileUnderSessionCwd(target);
+				if (!resolved.ok) return jsonError(resolved.reason, 403);
+				try {
+					return json(readTextPreview(resolved.path));
+				} catch (error) {
+					const code = (error as NodeJS.ErrnoException | null)?.code;
+					if (code === "ENOENT") return jsonError("file not found", 404);
+					return jsonError(error instanceof Error ? error.message : String(error), 400);
+				}
+			}
+
+			if (parts[1] === "raw" && req.method === "GET") {
+				const target = url.searchParams.get("path") ?? "";
+				if (!target) return jsonError("path is required");
+				const resolved = manager.resolveFileUnderSessionCwd(target);
+				if (!resolved.ok) return jsonError(resolved.reason, 403);
+				if (!isImagePath(resolved.path)) {
+					return jsonError("only image files can be served inline", 415);
+				}
+				const file = Bun.file(resolved.path);
+				if (!(await file.exists())) return jsonError("file not found", 404);
+				return new Response(file, {
+					headers: {
+						"content-type": mimeForPath(resolved.path),
+						"cache-control": "no-store",
+						"content-security-policy": "default-src 'none'",
 					},
 				});
 			}
