@@ -127,6 +127,16 @@ export const api = {
 	},
 	fsSearch: (prefix: string) =>
 		request<{ prefix: string; matches: string[] }>(`/api/fs/search?prefix=${encodeURIComponent(prefix)}`),
+	fsEntries: (path: string) =>
+		request<{ path: string; entries: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number }> }>(
+			`/api/fs/entries?path=${encodeURIComponent(path)}`,
+		),
+	fsPreview: (path: string) =>
+		request<{ kind: "text" | "image" | "binary"; mime: string; size: number; truncated: boolean; text?: string }>(
+			`/api/fs/preview?path=${encodeURIComponent(path)}`,
+		),
+	fsRawUrl: (path: string) => `/api/fs/raw?path=${encodeURIComponent(path)}`,
+	fsDownloadUrl: (path: string) => `/api/fs/file?download=1&path=${encodeURIComponent(path)}`,
 	fsPaths: (prefix: string, cwd?: string) => {
 		const params = new URLSearchParams({ prefix });
 		if (cwd) params.set("cwd", cwd);

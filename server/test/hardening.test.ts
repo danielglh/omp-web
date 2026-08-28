@@ -470,6 +470,134 @@ describe("non-mock omp CLI bridge errors surface to clients", () => {
 	});
 });
 
+// ── workspace file manager endpoints ─────────────────────────────────────────
+
+describe("workspace file manager endpoints", () => {
+	let wsCwd: string;
+	let wsBase: string;
+
+	beforeAll(async () => {
+		wsCwd = path.join(tempDir, "ws-fm");
+		fs.mkdirSync(path.join(wsCwd, "docs"), { recursive: true });
+		fs.mkdirSync(path.join(wsCwd, "assets"), { recursive: true });
+		fs.writeFileSync(path.join(wsCwd, "README.md"), "# Hello\n\nworld");
+		fs.writeFileSync(path.join(wsCwd, "notes.txt"), "plain notes");
+		fs.writeFileSync(
+			path.join(wsCwd, "page.html"),
+			"<html><body><p>report</p><script>alert(1)</script></body></html>",
+		);
+		fs.writeFileSync(
+			path.join(wsCwd, "logo.png"),
+			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]),
+		);
+		fs.writeFileSync(path.join(wsCwd, "blob.bin"), Buffer.from([0x00, 0x01, 0x02, 0x00, 0x03]));
+		fs.writeFileSync(path.join(wsCwd, "docs", "guide.md"), "# Guide");
+		try {
+			fs.symlinkSync("/etc/passwd", path.join(wsCwd, "escape.txt"));
+			fs.symlinkSync("/etc", path.join(wsCwd, "escape-dir"));
+		} catch {
+			// best effort
+		}
+
+		const dataDir = path.join(tempDir, "data-ws");
+		fs.mkdirSync(dataDir, { recursive: true });
+		const registry = {
+			sessions: [{ id: "ws-fm", name: "fm", cwd: wsCwd, createdAt: 0, updatedAt: 0, messageCount: 0 }],
+		};
+		fs.writeFileSync(path.join(dataDir, "sessions.json"), JSON.stringify(registry));
+		const config = loadConfig({
+			dataDir,
+			port: 0,
+			host: "127.0.0.1",
+			mockMode: true,
+			webDistDir: tempDir,
+		});
+		const fmManager = new SessionManager(config);
+		await fmManager.load();
+		wsBase = `http://127.0.0.1:${createApp({ config, manager: fmManager }).server.port}`;
+	});
+
+	test("entries lists one directory with types and sizes, within a session cwd", async () => {
+		const res = await fetch(`${wsBase}/api/fs/entries?path=${encodeURIComponent(wsCwd)}`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as {
+			path: string;
+			entries: Array<{ name: string; type: string; size: number }>;
+		};
+		expect(body.path).toBe(fs.realpathSync(wsCwd)); // realpath-normalized (e.g. /var → /private/var)
+		const byName = Object.fromEntries(body.entries.map(e => [e.name, e]));
+		expect(byName["README.md"]).toMatchObject({ type: "file" });
+		expect(byName.docs).toMatchObject({ type: "dir" });
+		expect(byName["logo.png"].size).toBeGreaterThan(0);
+		expect(body.entries.some(e => e.name === "escape.txt")).toBe(true); // listed, but…
+	});
+
+	test("navigating into a symlinked directory that escapes is refused", async () => {
+		const res = await fetch(`${wsBase}/api/fs/entries?path=${encodeURIComponent(path.join(wsCwd, "escape-dir"))}`);
+		expect(res.status).toBe(403);
+	});
+
+	test("entries outside every session cwd are refused", async () => {
+		expect((await fetch(`${wsBase}/api/fs/entries?path=/etc`)).status).toBe(403);
+	});
+
+	test("preview returns decoded text with truncation metadata", async () => {
+		const res = await fetch(`${wsBase}/api/fs/preview?path=${encodeURIComponent(path.join(wsCwd, "README.md"))}`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { kind: string; mime: string; text: string; truncated: boolean };
+		expect(body.kind).toBe("text");
+		expect(body.mime).toBe("text/markdown");
+		expect(body.text).toContain("# Hello");
+		expect(body.truncated).toBe(false);
+	});
+
+	test("images are classified for the raw viewer, binaries are not decodable", async () => {
+		const img = await fetch(`${wsBase}/api/fs/preview?path=${encodeURIComponent(path.join(wsCwd, "logo.png"))}`);
+		const imgBody = (await img.json()) as { kind: string; mime: string };
+		expect(imgBody.kind).toBe("image");
+		expect(imgBody.mime).toBe("image/png");
+
+		const bin = await fetch(`${wsBase}/api/fs/preview?path=${encodeURIComponent(path.join(wsCwd, "blob.bin"))}`);
+		const binBody = (await bin.json()) as { kind: string; text?: string };
+		expect(binBody.kind).toBe("binary");
+		expect(binBody.text).toBeUndefined();
+	});
+
+	test("raw serving is restricted to image types", async () => {
+		const png = await fetch(`${wsBase}/api/fs/raw?path=${encodeURIComponent(path.join(wsCwd, "logo.png"))}`);
+		expect(png.status).toBe(200);
+		expect(png.headers.get("content-type")).toBe("image/png");
+		expect((await png.arrayBuffer()).byteLength).toBeGreaterThan(0);
+
+		expect(
+			(await fetch(`${wsBase}/api/fs/raw?path=${encodeURIComponent(path.join(wsCwd, "notes.txt"))}`)).status,
+		).toBe(415);
+	});
+
+	test("content reads cannot escape via symlinks or traversal", async () => {
+		expect(
+			(await fetch(`${wsBase}/api/fs/preview?path=${encodeURIComponent(path.join(wsCwd, "escape.txt"))}`)).status,
+		).toBe(403);
+		expect(
+			(await fetch(`${wsBase}/api/fs/raw?path=${encodeURIComponent(path.join(wsCwd, "escape.txt"))}`)).status,
+		).toBe(403);
+		// Whatever the exact status (403 containment / 400 not-a-directory),
+		// no directory listing may leak.
+		const traversal = await fetch(
+			`${wsBase}/api/fs/entries?path=${encodeURIComponent(path.join(wsCwd, "..%2F..%2Fetc"))}`,
+		);
+		expect(traversal.status).not.toBe(200);
+	});
+
+	test("html preview text keeps its scripts inline (the iframe sandbox neutralizes them)", async () => {
+		const res = await fetch(`${wsBase}/api/fs/preview?path=${encodeURIComponent(path.join(wsCwd, "page.html"))}`);
+		const body = (await res.json()) as { kind: string; mime: string; text: string };
+		expect(body.kind).toBe("text");
+		expect(body.mime).toBe("text/html");
+		expect(body.text).toContain("<script>alert(1)</script>"); // verbatim; sandbox iframe renders inert
+	});
+});
+
 describe("fs picker endpoints", () => {
 	let pickerCwd: string;
 

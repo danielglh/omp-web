@@ -33,6 +33,111 @@ export interface PathSearch {
 
 const MAX_DIRS = 500;
 
+// ── workspace file manager ───────────────────────────────────────────────────
+
+export interface WorkspaceEntry {
+	name: string;
+	type: "dir" | "file";
+	size: number;
+	mtime: number;
+}
+
+const PREVIEW_MAX_BYTES = 512 * 1024;
+
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+	png: "image/png",
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	gif: "image/gif",
+	webp: "image/webp",
+	svg: "image/svg+xml",
+	bmp: "image/bmp",
+	ico: "image/x-icon",
+	avif: "image/avif",
+};
+
+const TEXT_MIME_BY_EXT: Record<string, string> = {
+	md: "text/markdown",
+	mdx: "text/markdown",
+	html: "text/html",
+	htm: "text/html",
+	txt: "text/plain",
+	json: "application/json",
+	js: "text/javascript",
+	mjs: "text/javascript",
+	css: "text/css",
+	yml: "text/yaml",
+	yaml: "text/yaml",
+	toml: "text/plain",
+	csv: "text/csv",
+	xml: "text/xml",
+	sh: "text/x-sh",
+	ts: "text/plain",
+	tsx: "text/plain",
+	env: "text/plain",
+	log: "text/plain",
+};
+
+export function isImagePath(filePath: string): boolean {
+	return IMAGE_MIME_BY_EXT[path.extname(filePath).slice(1).toLowerCase()] !== undefined;
+}
+
+export function mimeForPath(filePath: string): string {
+	const ext = path.extname(filePath).slice(1).toLowerCase();
+	return IMAGE_MIME_BY_EXT[ext] ?? TEXT_MIME_BY_EXT[ext] ?? "text/plain";
+}
+
+/** Directory entries for the file-manager tree (dirs first, then names). */
+export function listWorkspaceEntries(dir: string): WorkspaceEntry[] {
+	const entries = fs
+		.readdirSync(dir, { withFileTypes: true })
+		.map(dirent => {
+			const full = path.join(dir, dirent.name);
+			let size = 0;
+			let mtime = 0;
+			try {
+				const stat = fs.statSync(full);
+				size = stat.size;
+				mtime = stat.mtimeMs;
+			} catch {
+				// racing delete — still list the name
+			}
+			return { name: dirent.name, type: dirent.isDirectory() ? ("dir" as const) : ("file" as const), size, mtime };
+		})
+		.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1))
+		.slice(0, MAX_DIRS);
+	return entries;
+}
+
+export interface FilePreview {
+	kind: "text" | "image" | "binary";
+	mime: string;
+	size: number;
+	truncated: boolean;
+	text?: string;
+}
+
+/** Classify and (for text) decode up to `maxBytes` of a file for preview. */
+export function readTextPreview(filePath: string, maxBytes = PREVIEW_MAX_BYTES): FilePreview {
+	const stat = fs.statSync(filePath);
+	const mime = mimeForPath(filePath);
+	if (isImagePath(filePath)) {
+		return { kind: "image", mime, size: stat.size, truncated: false };
+	}
+	const fd = fs.openSync(filePath, "r");
+	try {
+		const buffer = Buffer.alloc(Math.min(maxBytes + 1, stat.size || maxBytes));
+		const read = fs.readSync(fd, buffer, 0, buffer.byteLength, 0);
+		const slice = buffer.subarray(0, read);
+		const truncated = stat.size > maxBytes;
+		const binary = slice.includes(0);
+		if (binary) return { kind: "binary", mime, size: stat.size, truncated: false };
+		return { kind: "text", mime, size: stat.size, truncated, text: slice.toString("utf8") };
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
 export function listDir(pathArg?: string, showHidden = false): DirListing {
 	const home = os.homedir();
 	const target = pathArg ? path.resolve(pathArg) : home;
