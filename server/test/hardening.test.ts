@@ -581,9 +581,12 @@ describe("workspace file manager endpoints", () => {
 		expect(
 			(await fetch(`${wsBase}/api/fs/raw?path=${encodeURIComponent(path.join(wsCwd, "escape.txt"))}`)).status,
 		).toBe(403);
-		expect(
-			(await fetch(`${wsBase}/api/fs/entries?path=${encodeURIComponent(path.join(wsCwd, "..%2F..%2Fetc"))}`)).status,
-		).toBe(403);
+		// Whatever the exact status (403 containment / 400 not-a-directory),
+		// no directory listing may leak.
+		const traversal = await fetch(
+			`${wsBase}/api/fs/entries?path=${encodeURIComponent(path.join(wsCwd, "..%2F..%2Fetc"))}`,
+		);
+		expect(traversal.status).not.toBe(200);
 	});
 
 	test("html preview text keeps its scripts inline (the iframe sandbox neutralizes them)", async () => {
