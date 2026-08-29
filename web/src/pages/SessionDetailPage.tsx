@@ -135,9 +135,13 @@ export function SessionDetailPage() {
 				) : null}
 
 				<div className="ml-auto flex items-center gap-2">
-					<ThemeToggle />
-					<SettingsLink />
-					<LogoutButton />
+					{/* The mobile top bar already carries these three — a second copy
+						    here would show them twice on narrow screens. */}
+					<div className="hidden items-center gap-2 lg:flex">
+						<ThemeToggle />
+						<SettingsLink />
+						<LogoutButton />
+					</div>
 					<button
 						type="button"
 						onClick={() => setShowSide(s => !s)}

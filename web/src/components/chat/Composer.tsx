@@ -506,11 +506,14 @@ export function Composer({ store, snapshot, assistant = false }: ComposerProps) 
 							</div>
 						)}
 
-						<div className="ml-auto flex shrink-0 items-center gap-2">
+						{/* min-w-0 (not shrink-0): the model chip is the elastic item —
+							    it truncates so the row still fits narrow screens instead of
+							    pushing the primary button out of the composer. */}
+						<div className="ml-auto flex min-w-0 items-center gap-2">
 							{/* Queued message count */}
 							{queuedCount > 0 ? (
 								<span
-									className="flex h-7 items-center gap-1 rounded-md border border-border bg-surface-2 px-2 font-mono text-[10px] text-fg-2"
+									className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-border bg-surface-2 px-2 font-mono text-[10px] text-fg-2"
 									title={`${queuedCount} message(s) queued`}
 								>
 									<ListPlus className="h-3 w-3" />
@@ -527,10 +530,10 @@ export function Composer({ store, snapshot, assistant = false }: ComposerProps) 
 											type="button"
 											onClick={() => toggleMenu("model")}
 											title="Switch model"
-											className="flex h-7 items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2.5 font-mono text-[10.5px] text-fg-1 hover:border-border-strong"
+											className="flex h-7 min-w-0 items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2.5 font-mono text-[10.5px] text-fg-1 hover:border-border-strong"
 										>
 											<Sparkles className="h-3 w-3 shrink-0 text-cat-meta" />
-											<span className="max-w-[7.5rem] truncate sm:max-w-44">
+											<span className="min-w-0 max-w-[7.5rem] truncate sm:max-w-44">
 												{modelLabel ??
 													(currentModel ? `${currentModel.provider}/${currentModel.id}` : "model")}
 											</span>
@@ -562,7 +565,7 @@ export function Composer({ store, snapshot, assistant = false }: ComposerProps) 
 									</div>
 
 									{/* Thinking level */}
-									<div className="relative">
+									<div className="relative shrink-0">
 										<button
 											type="button"
 											onClick={() => toggleMenu("think")}

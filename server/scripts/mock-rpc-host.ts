@@ -142,7 +142,12 @@ function streamCannedTurn() {
 	];
 	let index = 0;
 	const tick = () => {
-		if (index >= steps.length) return;
+		if (index >= steps.length) {
+			// Turn finished: drop the timer so get_state reports isStreaming
+			// false again — the UI keys its queue/stop mode off that flag.
+			streamTimer = undefined;
+			return;
+		}
 		steps[index]!();
 		index++;
 		streamTimer = setTimeout(tick, 250);
@@ -253,7 +258,9 @@ function handleFrame(frame: unknown) {
 			pendingPrompt = { id, command: type };
 			write({ id, type: "response", command: type, success: true });
 			write({ type: "turn_start" });
-			// Echo the prompt back as a user message, images included.
+			// Echo the prompt back as a user message, images included. Real omp
+			// finalizes the entry with message_end; without it the UI keeps the
+			// message in streaming state forever ("agent is working…" never clears).
 			const images = Array.isArray(obj.images) ? (obj.images as unknown[]) : [];
 			const content =
 				images.length > 0
@@ -262,10 +269,9 @@ function handleFrame(frame: unknown) {
 							...images.map(image => ({ type: "image", ...(image as Record<string, unknown>) })),
 						]
 					: String(obj.message ?? "");
-			write({
-				type: "message_start",
-				message: { role: "user", content, timestamp: Date.now() },
-			});
+			const echo = { role: "user", content, timestamp: Date.now() };
+			write({ type: "message_start", message: echo });
+			write({ type: "message_end", message: echo });
 			streamCannedTurn();
 			return;
 		}
