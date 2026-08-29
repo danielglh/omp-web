@@ -14,6 +14,7 @@
 			"web/src/**",
 			"web/test/**",
 			"shared/src/**",
+			"e2e/**",
 			"web/*.ts",
 			"server/*.ts"
 		],

@@ -5,7 +5,7 @@
 	"description": "Run and operate omp agents on a remote server through a browser UI",
 	"license": "MIT",
 	"type": "module",
-	"workspaces": ["server", "web", "shared"],
+	"workspaces": ["server", "web", "shared", "e2e"],
 	"scripts": {
 		"dev": "concurrently -k -n server,web -c blue,magenta \"bun run --cwd server dev\" \"bun run --cwd web dev\"",
 		"dev:server": "bun run --cwd server dev",
@@ -16,7 +16,8 @@
 		"start": "bun run --cwd server start",
 		"typecheck": "bun run --cwd shared typecheck && bun run --cwd server typecheck && bun run --cwd web typecheck",
 		"check": "biome check . && bun run typecheck",
-		"test": "bun run --cwd server test && bun run --cwd web test"
+		"test": "bun run --cwd server test && bun run --cwd web test",
+		"test:e2e": "bun run --cwd e2e test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
