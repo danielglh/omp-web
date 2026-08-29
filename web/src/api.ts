@@ -795,11 +795,16 @@ export class SessionStore {
 		this.sendCommand({ type: "login", providerId, id: "ui:login" });
 	}
 
-	/** Insert or replace the live slot for a message (matched by timestamp). */
+	/**
+	 * Insert or replace the live slot for a message (matched by role +
+	 * timestamp — same identity `sameMessage` uses for history). A timestamp
+	 * alone is not an identity: a user echo and the assistant reply can share
+	 * one, and matching on it alone would let one message swallow the other.
+	 */
 	#upsertLive(message: WireMessage, streaming: boolean) {
 		const role: RenderedMessage["role"] = message.role === "user" ? "user" : "assistant";
-		const entry: RenderedMessage = { key: `live-${message.timestamp}`, role, message, streaming };
-		const index = this.#liveMessages.findIndex(m => m.message.timestamp === message.timestamp);
+		const entry: RenderedMessage = { key: `live-${role}-${message.timestamp}`, role, message, streaming };
+		const index = this.#liveMessages.findIndex(m => m.role === role && m.message.timestamp === message.timestamp);
 		if (index >= 0) {
 			this.#liveMessages[index] = entry;
 		} else {

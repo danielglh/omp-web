@@ -1,0 +1,14 @@
+{
+	"name": "@omp-web/e2e",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Playwright smoke + multi-viewport layout tests against the mock host",
+	"license": "MIT",
+	"scripts": {
+		"test": "playwright test"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.54.0"
+	}
+}

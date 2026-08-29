@@ -49,6 +49,17 @@ interface Pending {
 
 let pendingPrompt: Pending | undefined;
 let streamTimer: ReturnType<typeof setTimeout> | undefined;
+let lastMessageTs = 0;
+/**
+ * Strictly increasing message timestamps. The first assistant step runs
+ * synchronously (same millisecond as the user echo it replies to), and
+ * consumers identify live messages by timestamp — so never stamp twice with
+ * the same value.
+ */
+function nextMessageTs(): number {
+	lastMessageTs = Math.max(lastMessageTs + 1, Date.now());
+	return lastMessageTs;
+}
 let pendingLogin: { id?: string; providerId: string } | undefined;
 /** Names announced by the host via set_host_tools (assistant sessions). */
 let registeredHostTools: string[] = [];
@@ -70,7 +81,7 @@ function streamCannedTurn() {
 				model: "mock-model",
 				usage: { input: 10, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 10, cost: { total: 0 } },
 				stopReason: "toolUse",
-				timestamp: Date.now(),
+				timestamp: nextMessageTs(),
 			};
 			write({ type: "message_start", message: current });
 		},
@@ -269,7 +280,7 @@ function handleFrame(frame: unknown) {
 							...images.map(image => ({ type: "image", ...(image as Record<string, unknown>) })),
 						]
 					: String(obj.message ?? "");
-			const echo = { role: "user", content, timestamp: Date.now() };
+			const echo = { role: "user", content, timestamp: nextMessageTs() };
 			write({ type: "message_start", message: echo });
 			write({ type: "message_end", message: echo });
 			streamCannedTurn();

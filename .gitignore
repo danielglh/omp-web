@@ -18,3 +18,7 @@ data/
 
 # local test evidence
 gui-test-screenshots/
+
+# e2e (playwright)
+test-results/
+playwright-report/
