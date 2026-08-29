@@ -1,7 +1,13 @@
+import * as path from "node:path";
 import type { APIRequestContext, Page } from "@playwright/test";
 
 /** Pre-shared token the server under test is started with (see playwright.config). */
 export const TOKEN = "e2e-token";
+
+/** Throwaway env root — keep in sync with e2e/scripts/prepare-env.mjs. */
+export const E2E_ROOT = path.join(process.env.TMPDIR ?? "/tmp", "omp-web-e2e");
+/** Fixture project the server's default cwd points at. */
+export const PROJECT_DIR = path.join(E2E_ROOT, "project");
 
 /** Exchange the access token for a session cookie, API-level (no UI roundtrip). */
 export async function login(request: APIRequestContext): Promise<void> {

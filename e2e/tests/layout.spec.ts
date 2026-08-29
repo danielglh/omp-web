@@ -1,5 +1,5 @@
 import { type Locator, expect, test } from "@playwright/test";
-import { createSession, gotoPage } from "./helpers";
+import { PROJECT_DIR, createSession, gotoPage } from "./helpers";
 
 // The reported breakages were phone-width; the ladder covers phone (incl. the
 // 320px floor), tablet (md), and the lg+ desktops where the layout switches.
@@ -22,30 +22,42 @@ async function expectContained(outer: Locator, inner: Locator) {
 	expect(innerBox!.y + innerBox!.height).toBeLessThanOrEqual(outerBox!.y + outerBox!.height + 1);
 }
 
+/** The global actions must exist exactly once per viewport — mobile top bar
+ * below lg, session header at lg+, never both (and never zero). */
+async function expectSingleHeaderActions(page: import("@playwright/test").Page) {
+	for (const label of ["Log out", "Settings", "Toggle theme"]) {
+		await expect(page.locator(`button[aria-label="${label}"]:visible`)).toHaveCount(1);
+	}
+}
+
+/** Generic overflow catcher: the document must not scroll sideways. */
+async function expectNoHorizontalOverflow(page: import("@playwright/test").Page) {
+	const overflow = await page.evaluate(
+		() => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+	);
+	expect(overflow, "no horizontal overflow").toBeLessThanOrEqual(1);
+}
+
 for (const viewport of VIEWPORTS) {
 	test(`layout ${viewport.width}x${viewport.height}: single header actions, no horizontal overflow, composer contained`, async ({
 		page,
 	}) => {
 		const session = await (async () => {
 			await gotoPage(page, "/");
-			return createSession(page.request, { name: "layout-probe", cwd: "/tmp", approvalMode: "write" });
+			return createSession(page.request, { name: "layout-probe", cwd: PROJECT_DIR, approvalMode: "write" });
 		})();
+
+		// Home first: same header/overflow invariants on the session list.
 		await page.setViewportSize(viewport);
+		await page.goto("/");
+		await expectSingleHeaderActions(page);
+		await expectNoHorizontalOverflow(page);
+
+		// Then the session page, which adds the composer to the mix.
 		await page.goto(`/sessions/${session.id}`);
 		await expect(page.getByRole("textbox", { name: /^Prompt the agent/ })).toBeVisible();
-
-		// The global actions live in exactly one place per viewport: the mobile
-		// top bar below lg, the session header at lg+. Catches the "rendered
-		// twice on phones" bug class.
-		for (const label of ["Log out", "Settings", "Toggle theme"]) {
-			await expect(page.locator(`button[aria-label="${label}"]:visible`)).toHaveCount(1);
-		}
-
-		// Nothing leaks horizontally at this size (generic overflow catcher).
-		const overflow = await page.evaluate(
-			() => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-		);
-		expect(overflow, "no horizontal overflow").toBeLessThanOrEqual(1);
+		await expectSingleHeaderActions(page);
+		await expectNoHorizontalOverflow(page);
 
 		// The composer's primary button stays inside the composer box — idle,
 		// mid-turn/queued, and after everything drains.

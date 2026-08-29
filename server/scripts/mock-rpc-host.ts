@@ -72,6 +72,9 @@ function stopStream() {
 
 function streamCannedTurn() {
 	stopStream();
+	// Step cadence. Tests lengthen it (OMP_WEB_MOCK_STEP_MS) so they can
+	// interact mid-turn — queue messages, abort — without racing the drain.
+	const stepMs = Math.max(1, Number(process.env.OMP_WEB_MOCK_STEP_MS ?? 250));
 	let current: Record<string, unknown> | undefined;
 	const steps: Array<() => void> = [
 		() => {
@@ -161,7 +164,7 @@ function streamCannedTurn() {
 		}
 		steps[index]!();
 		index++;
-		streamTimer = setTimeout(tick, 250);
+		streamTimer = setTimeout(tick, stepMs);
 	};
 	tick();
 }
