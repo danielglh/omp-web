@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { TOKEN, gotoPage } from "./helpers";
+import { PROJECT_DIR, TOKEN, createSession, gotoPage, login } from "./helpers";
 
 test.describe("flows against the mock host", () => {
 	test("token gate: wrong token is refused, correct token unlocks", async ({ page }) => {
@@ -62,5 +62,73 @@ test.describe("flows against the mock host", () => {
 		// Revocation is server-side: a reload stays gated.
 		await page.reload();
 		await expect(page.getByLabel("Access token", { exact: true })).toBeVisible();
+	});
+
+	test("denying the tool call answers the dialog too", async ({ page }) => {
+		await gotoPage(page, "/");
+		const session = await createSession(page.request, { name: "e2e-deny", cwd: PROJECT_DIR, approvalMode: "write" });
+		await page.goto(`/sessions/${session.id}`);
+
+		await expect(page.getByText("Allow tool: read_file")).toBeVisible();
+		await page.getByRole("button", { name: "Deny", exact: true }).click();
+		await expect(page.getByText("Allow tool: read_file")).toBeHidden();
+		await expect(page.getByText(/extension ui answered .*value=Deny/)).toBeVisible();
+	});
+
+	test("stopped sessions auto-restart when opened", async ({ page, request }) => {
+		await login(request);
+		await gotoPage(page, "/");
+		const session = await createSession(request, { name: "e2e-recover", cwd: PROJECT_DIR, approvalMode: "write" });
+		await request.post(`/api/sessions/${session.id}/stop`);
+		await expect
+			.poll(async () => {
+				const body = (await (await request.get(`/api/sessions/${session.id}`)).json()) as {
+					session: { status: string };
+				};
+				return body.session.status;
+			})
+			.toBe("stopped");
+
+		// Opening the page auto-starts the agent: the header dot flips to the
+		// running color (the rail copy on this page is a point-in-time snapshot).
+		await page.goto(`/sessions/${session.id}`);
+		await expect(page.locator("main span.h-2.w-2")).toHaveClass(/bg-sev-success/, { timeout: 15_000 });
+		await expect(page.locator(".border-sev-error\\/30")).toHaveCount(0);
+	});
+
+	test("resume dialog lists the mock history and resumes it", async ({ page }) => {
+		await gotoPage(page, "/");
+		await page.getByRole("button", { name: "Resume omp session" }).click();
+		// Mock mode serves a canned history entry for the default cwd.
+		await expect(page.getByText("mock history session")).toBeVisible({ timeout: 10_000 });
+		await page.getByText("mock history session").click();
+
+		// Resuming creates a fresh web session pointed at the omp history.
+		await expect(page).toHaveURL(/\/sessions\/[^/]+$/);
+		await expect(page.getByText("Welcome! This is a mock session.")).toBeVisible();
+	});
+
+	test("a second browser joins a live session and sees the turn", async ({ browser, page }) => {
+		const session = await (async () => {
+			await gotoPage(page, "/");
+			return createSession(page.request, { name: "e2e-live", cwd: PROJECT_DIR, approvalMode: "write" });
+		})();
+		await page.goto(`/sessions/${session.id}`);
+
+		const ctxB = await browser.newContext();
+		const pageB = await ctxB.newPage();
+		await gotoPage(pageB, `/sessions/${session.id}`);
+		await expect(pageB.getByRole("textbox", { name: /^Prompt the agent/ })).toBeVisible();
+
+		// Dismiss A's pending approval, then run a turn from A only.
+		await page.getByRole("button", { name: "Approve" }).click();
+		await expect(page.getByText("Allow tool: read_file")).toBeHidden();
+		const composer = page.getByRole("textbox", { name: /^Prompt the agent/ });
+		await composer.fill("live join probe");
+		await composer.press("Enter");
+
+		await expect(pageB.getByRole("main").getByText("live join probe")).toBeVisible();
+		await expect(pageB.getByRole("button", { name: /thinking/ })).toBeVisible();
+		await ctxB.close();
 	});
 });
